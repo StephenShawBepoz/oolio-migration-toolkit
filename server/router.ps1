@@ -24,8 +24,9 @@ function Get-StepFunctionName {
             "set-wallpaper"    = "Invoke-WindowsSetWallpaper"
         }
         "dependencies" = @{
-            "check-chrome"   = "Invoke-DepsCheckChrome"
-            "check-webview2" = "Invoke-DepsCheckWebView2"
+            "check-chrome"     = "Invoke-DepsCheckChrome"
+            "check-webview2"   = "Invoke-DepsCheckWebView2"
+            "teamviewer"       = "Invoke-DepsInstallTeamViewer"
         }
         "oolio" = @{
             "create-folders"     = "Invoke-OolioCreateFolders"
