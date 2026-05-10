@@ -1,7 +1,11 @@
 # server.ps1 - HTTP listener for Oolio Migration Toolkit
-# Listens on http://localhost:8080/ and serves UI + executes module scripts
+# Serves UI + executes module scripts on http://localhost:<port>/.
+# Port is supplied by Launch.ps1 (which probes for a free one); defaults to 8080.
 
-param([string]$ToolkitRoot)
+param(
+    [string]$ToolkitRoot,
+    [int]$Port = 8080
+)
 
 if (-not $ToolkitRoot) { $ToolkitRoot = (Resolve-Path "$PSScriptRoot\..").Path }
 
@@ -124,9 +128,9 @@ try {
 
 # ----- HTTP Listener -----
 $listener = New-Object System.Net.HttpListener
-$listener.Prefixes.Add("http://localhost:8080/")
+$listener.Prefixes.Add("http://localhost:$Port/")
 $listener.Start()
-Write-Output "Listening on http://localhost:8080/"
+Write-Output "Listening on http://localhost:$Port/"
 Write-Output "Session log: $sessionLogPath"
 
 # ----- Helpers -----

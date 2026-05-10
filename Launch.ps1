@@ -20,22 +20,53 @@ if (-not (Test-Path $serverScript)) {
     exit 1
 }
 
+# Pick the first port from the candidate list that we can bind to. Some sites
+# already have 8080 taken (Tomcat, Jenkins, dev tools), so we walk a short list
+# rather than failing silently when the default is in use.
+function Test-PortFree {
+    param([int]$Port)
+    $tcp = $null
+    try {
+        $tcp = New-Object System.Net.Sockets.TcpListener([System.Net.IPAddress]::Loopback, $Port)
+        $tcp.Start()
+        return $true
+    } catch {
+        return $false
+    } finally {
+        if ($tcp) { try { $tcp.Stop() } catch {} }
+    }
+}
+
+$candidatePorts = @(8080, 8081, 8082, 8083, 8084)
+$chosenPort = $null
+foreach ($p in $candidatePorts) {
+    if (Test-PortFree -Port $p) { $chosenPort = $p; break }
+}
+if (-not $chosenPort) {
+    Write-Host "Could not find a free port in $($candidatePorts -join ', '). Close anything using these ports and retry." -ForegroundColor Red
+    Read-Host "Press Enter to exit"
+    exit 1
+}
+
 Write-Host ""
 Write-Host "===============================================" -ForegroundColor Cyan
 Write-Host " Oolio Migration Toolkit" -ForegroundColor Cyan
 Write-Host "===============================================" -ForegroundColor Cyan
 Write-Host ""
-Write-Host "Starting local server on http://localhost:8080..."
+if ($chosenPort -ne 8080) {
+    Write-Host "Default port 8080 is in use. Falling back to $chosenPort." -ForegroundColor Yellow
+}
+Write-Host "Starting local server on http://localhost:$chosenPort..."
 
-# 3. Start server as background job
-$job = Start-Job -FilePath $serverScript -ArgumentList $toolkitRoot
+# 3. Start server as background job (pass chosen port through)
+$job = Start-Job -FilePath $serverScript -ArgumentList $toolkitRoot, $chosenPort
 
 # 4. Poll /ping until ready (up to ~5 seconds)
 $ready = $false
 for ($i = 0; $i -lt 10; $i++) {
     Start-Sleep -Milliseconds 500
     try {
-        $r = Invoke-WebRequest -Uri "http://localhost:8080/ping" -UseBasicParsing -TimeoutSec 1
+        $r = Invoke-WebRequest -Uri "http://localhost:$chosenPort/ping" -UseBasicParsing -TimeoutSec 1
         if ($r.StatusCode -eq 200) { $ready = $true; break }
     } catch {}
 }
@@ -53,7 +84,7 @@ if (-not $ready) {
 Write-Host "Server ready." -ForegroundColor Green
 
 # 5. Open default browser
-Start-Process "http://localhost:8080"
+Start-Process "http://localhost:$chosenPort"
 
 # 6. Hold the window open
 Write-Host ""
