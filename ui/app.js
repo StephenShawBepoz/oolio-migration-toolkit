@@ -14,7 +14,7 @@ const MODULES = [
             { id: 'zip-data',        title: 'Zip Bepoz data',        risk: 'safe',   note: 'Compresses the DataPath folder into the BackupPath. Verify the zip exists before continuing.' },
             { id: 'kill-processes',  title: 'Terminate Bepoz processes', risk: 'safe', note: 'Force-stops any running Bepoz/Backoffice processes.' },
             { id: 'clear-startup',   title: 'Clear shell:startup',   risk: 'warn',   note: 'Removes everything from the user shell:startup folder. POS terminal only.' },
-            { id: 'check-run-key',   title: 'Clean HKCU Run key',    risk: 'warn',   note: 'Lists current entries and removes known Bepoz Run keys.' },
+            { id: 'check-run-key',   title: 'Export & clean HKCU Run key', risk: 'warn', note: 'Exports the entire HKCU Run key to the backup folder (HKCU_Run_<timestamp>.reg), then removes known Bepoz Run keys. Restore the export with reg import if needed.' },
             { id: 'delete-registry', title: 'Delete Bepoz registry', risk: 'danger', note: 'Removes HKCU\\Software\\Backoffice. Make sure the data backup zip exists first.' },
             { id: 'uninstall',       title: 'Uninstall Bepoz programs', risk: 'danger', note: 'Optional. Calls Win32_Product uninstall for any program containing "Bepoz".' }
         ]

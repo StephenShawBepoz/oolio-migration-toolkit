@@ -125,9 +125,39 @@ function Invoke-BepozClearStartup {
 }
 
 function Invoke-BepozCheckRunKey {
-    Write-Section "Checking HKCU Run key for Bepoz entries"
+    Write-Section "Exporting and cleaning HKCU Run key"
 
-    $runPath = "HKCU:\Software\Microsoft\Windows\CurrentVersion\Run"
+    $runPath    = "HKCU:\Software\Microsoft\Windows\CurrentVersion\Run"
+    $runPathReg = "HKCU\Software\Microsoft\Windows\CurrentVersion\Run"
+
+    # Export the Run key to the same directory as the data backup, before any changes.
+    $backupPath = Get-BepozRegValue "BackupPath"
+    if (-not $backupPath) {
+        Write-Log "BackupPath not found in HKCU\Software\Backoffice. Cannot export Run key." "ERROR"
+        Write-Log "Run the read-registry step first to confirm the registry is intact." "WARN"
+        return
+    }
+
+    if (-not (Test-Path $backupPath)) {
+        Write-Log "Backup folder does not exist. Creating: $backupPath"
+        New-Item -ItemType Directory -Path $backupPath -Force | Out-Null
+    }
+
+    $timestamp = Get-Date -Format "yyyy-MM-dd_HHmm"
+    $exportFile = Join-Path $backupPath "HKCU_Run_$timestamp.reg"
+
+    Write-Log "Exporting HKCU Run key to: $exportFile"
+    reg export $runPathReg $exportFile /y | Out-Null
+    if ($LASTEXITCODE -ne 0 -or -not (Test-Path $exportFile)) {
+        Write-Log "Failed to export Run key (reg.exe exit code $LASTEXITCODE). Aborting before any cleanup." "ERROR"
+        return
+    }
+
+    $size = [math]::Round((Get-Item $exportFile).Length / 1KB, 2)
+    Write-Log "Export complete. File size: $size KB" "OK"
+    Write-Log "Restore later with: reg import `"$exportFile`""
+
+    # Now list current entries and remove known Bepoz ones.
     $entries = Get-ItemProperty -Path $runPath -ErrorAction SilentlyContinue
 
     Write-Log "Current Run key entries:"
