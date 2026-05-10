@@ -76,11 +76,31 @@ function Invoke-BepozZipData {
     $dataPath   = Get-BepozRegValue "DataPath"
     $backupPath = Get-BepozRegValue "BackupPath"
 
-    if (-not $dataPath)   { Write-Log "DataPath not found in registry." "ERROR"; return }
-    if (-not $backupPath) { Write-Log "BackupPath not found in registry." "ERROR"; return }
+    # Missing registry values are not errors here - just nothing to back up. The
+    # read-registry step already warned about them; downstream steps that need a
+    # value still report individually.
+    if (-not $dataPath) {
+        Write-Log "DataPath not present in registry. Nothing to back up - skipping." "WARN"
+        return
+    }
+    if (-not $backupPath) {
+        Write-Log "BackupPath not present in registry. Cannot determine backup destination - skipping." "WARN"
+        return
+    }
 
     if (-not (Test-Path $dataPath)) {
-        Write-Log "Data folder not found at: $dataPath" "ERROR"
+        Write-Log "Data folder not found at: $dataPath" "WARN"
+        Write-Log "Nothing to back up - skipping." "WARN"
+        return
+    }
+
+    # Count source files. An empty Data\ folder is a legitimate state on a fresh
+    # till or after a prior partial cleanup. Treat as a no-op success rather than
+    # an error so the migrate flow continues.
+    $sourceFiles = @(Get-ChildItem -Path $dataPath -Recurse -File -ErrorAction SilentlyContinue)
+    Write-Log "Source: $dataPath ($($sourceFiles.Count) file(s))"
+    if ($sourceFiles.Count -eq 0) {
+        Write-Log "Data folder is empty. Nothing to back up - treating as success." "WARN"
         return
     }
 
@@ -90,9 +110,8 @@ function Invoke-BepozZipData {
     }
 
     $timestamp = Get-Date -Format "yyyy-MM-dd_HHmm"
-    $zipPath = Join-Path $backupPath "Bepoz_Data_$timestamp.zip"
+    $zipPath   = Join-Path $backupPath "Bepoz_Data_$timestamp.zip"
 
-    Write-Log "Source: $dataPath"
     Write-Log "Destination: $zipPath"
     Write-Log "Compressing (using .NET ZipFile - no 2 GB limit)..."
 
@@ -119,14 +138,17 @@ function Invoke-BepozZipData {
         return
     }
 
-    $size = [math]::Round((Get-Item $zipPath).Length / 1MB, 2)
-    if ($size -le 0) {
-        Write-Log "Zip created but is 0 MB. Treating as failure." "ERROR"
+    # An empty ZipFile produced by CreateFromDirectory is ~22 bytes. If the source
+    # had files but the archive came out essentially empty, that is a real failure.
+    $sizeBytes = (Get-Item $zipPath).Length
+    $sizeMB    = [math]::Round($sizeBytes / 1MB, 2)
+    if ($sizeBytes -lt 100) {
+        Write-Log "Zip is $sizeBytes bytes (essentially empty) but source had $($sourceFiles.Count) file(s). Treating as failure." "ERROR"
         Remove-Item -Path $zipPath -Force -ErrorAction SilentlyContinue
         return
     }
 
-    Write-Log "Backup complete. File size: $size MB" "OK"
+    Write-Log "Backup complete. File size: $sizeMB MB ($sizeBytes bytes), $($sourceFiles.Count) source file(s)." "OK"
     Write-Log "Zip location: $zipPath" "OK"
     Write-Log "IMPORTANT: Verify this file exists and has a non-zero size before proceeding." "WARN"
 }
