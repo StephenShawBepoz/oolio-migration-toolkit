@@ -23,3 +23,77 @@ function Write-Section {
     Write-Output ""
     Write-Output "--- $title ---"
 }
+
+# Download a file with a heartbeat that emits the on-disk size every few seconds.
+# Returns $true on success, $false on failure (caller already sees an [ERROR] line).
+function Invoke-DownloadWithHeartbeat {
+    param(
+        [string]$Url,
+        [string]$OutFile,
+        [int]$IntervalSeconds = 3
+    )
+
+    if (Test-Path $OutFile) { Remove-Item $OutFile -Force -ErrorAction SilentlyContinue }
+
+    $job = Start-Job -ScriptBlock {
+        param($u, $o)
+        [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
+        Invoke-WebRequest -Uri $u -OutFile $o -UseBasicParsing -ErrorAction Stop
+    } -ArgumentList $Url, $OutFile
+
+    $start    = Get-Date
+    $lastBeat = $start
+    while ($job.State -eq 'Running') {
+        Start-Sleep -Milliseconds 500
+        $now = Get-Date
+        if (($now - $lastBeat).TotalSeconds -ge $IntervalSeconds) {
+            $elapsed = [int]($now - $start).TotalSeconds
+            $sizeMB  = 0
+            if (Test-Path $OutFile) {
+                $sizeMB = [math]::Round((Get-Item $OutFile).Length / 1MB, 1)
+            }
+            Write-Log "still downloading... $sizeMB MB after ${elapsed}s"
+            $lastBeat = $now
+        }
+    }
+
+    try { Receive-Job $job -ErrorAction Stop | Out-Null } catch {
+        Remove-Job $job -Force -ErrorAction SilentlyContinue
+        Remove-Item -Path $OutFile -Force -ErrorAction SilentlyContinue
+        Write-Log "Download failed: $($_.Exception.Message)" "ERROR"
+        return $false
+    }
+    Remove-Job $job -Force -ErrorAction SilentlyContinue
+
+    if (-not (Test-Path $OutFile) -or (Get-Item $OutFile).Length -eq 0) {
+        Write-Log "Download finished but the file is missing or empty." "ERROR"
+        return $false
+    }
+
+    $finalSize = [math]::Round((Get-Item $OutFile).Length / 1MB, 1)
+    $totalDl   = [int]((Get-Date) - $start).TotalSeconds
+    Write-Log "Downloaded: $finalSize MB to $OutFile in ${totalDl}s" "OK"
+    return $true
+}
+
+# Wait for a process started with -PassThru, emitting a heartbeat every N seconds.
+function Wait-ProcessWithHeartbeat {
+    param(
+        [System.Diagnostics.Process]$Process,
+        [string]$Label = "process",
+        [int]$IntervalSeconds = 5
+    )
+
+    $start    = Get-Date
+    $lastBeat = $start
+    while (-not $Process.HasExited) {
+        Start-Sleep -Milliseconds 500
+        $now = Get-Date
+        if (($now - $lastBeat).TotalSeconds -ge $IntervalSeconds) {
+            $e = $now - $start
+            $stamp = "{0}:{1:00}" -f [int]$e.TotalMinutes, ([int]$e.TotalSeconds % 60)
+            Write-Log "$Label still running, elapsed $stamp"
+            $lastBeat = $now
+        }
+    }
+}
