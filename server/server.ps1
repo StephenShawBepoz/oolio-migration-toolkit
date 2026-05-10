@@ -63,11 +63,71 @@ if (-not (Test-Path $progressPath)) {
     Get-DefaultProgress | ConvertTo-Json -Depth 5 | Set-Content -Path $progressPath -Encoding UTF8
 }
 
+# ----- Reset stale 'running' statuses on startup -----
+# If the toolkit was killed mid-step (browser closed, terminal rebooted, etc.) the step
+# stays 'running' in progress.json forever. Rewrite any 'running' to 'error' so the UI
+# surfaces it to the technician instead of looking confused.
+function Reset-StaleRunningStatuses {
+    param([string]$Path)
+    try {
+        $raw = Get-Content -Path $Path -Raw -Encoding UTF8
+        $obj = $raw | ConvertFrom-Json
+        $changed = 0
+        foreach ($prop in $obj.PSObject.Properties) {
+            if ($prop.Name -eq 'meta') { continue }
+            $module = $prop.Value
+            if ($null -eq $module) { continue }
+            $staleNames = @()
+            foreach ($step in $module.PSObject.Properties) {
+                if ($step.Value -eq 'running') { $staleNames += $step.Name }
+            }
+            foreach ($name in $staleNames) {
+                $module.PSObject.Properties.Item($name).Value = 'error'
+                $changed++
+                Write-Output "Reset stale 'running' on $($prop.Name)/$name -> 'error'"
+            }
+        }
+        if ($changed -gt 0) {
+            ($obj | ConvertTo-Json -Depth 5) | Set-Content -Path $Path -Encoding UTF8
+            Write-Output "Reset $changed stale running step(s)."
+        }
+    } catch {
+        Write-Output "Could not reset stale statuses: $($_.Exception.Message)"
+    }
+}
+Reset-StaleRunningStatuses -Path $progressPath
+
+# ----- Per-session log file -----
+# Tees every line of every step's output into C:\Oolio\Logs\session-<timestamp>.log so
+# techs can attach the file to support tickets. The folder is created if missing -
+# the toolkit may run before module 4's create-folders step.
+$logsFolder = "C:\Oolio\Logs"
+if (-not (Test-Path $logsFolder)) {
+    try { New-Item -ItemType Directory -Path $logsFolder -Force | Out-Null } catch {}
+}
+$sessionStamp   = Get-Date -Format "yyyy-MM-dd_HHmmss"
+$sessionLogPath = Join-Path $logsFolder "session-$sessionStamp.log"
+
+function Write-SessionLog {
+    param([string]$Line)
+    if (-not $sessionLogPath) { return }
+    try { Add-Content -Path $sessionLogPath -Value $Line -Encoding UTF8 -ErrorAction SilentlyContinue } catch {}
+}
+
+try {
+    Write-SessionLog ("=" * 78)
+    Write-SessionLog "Oolio Migration Toolkit session started: $(Get-Date -Format 'yyyy-MM-dd HH:mm:ss')"
+    Write-SessionLog "Toolkit root: $ToolkitRoot"
+    Write-SessionLog "Computer:     $env:COMPUTERNAME    User: $env:USERNAME"
+    Write-SessionLog ("=" * 78)
+} catch {}
+
 # ----- HTTP Listener -----
 $listener = New-Object System.Net.HttpListener
 $listener.Prefixes.Add("http://localhost:8080/")
 $listener.Start()
 Write-Output "Listening on http://localhost:8080/"
+Write-Output "Session log: $sessionLogPath"
 
 # ----- Helpers -----
 function Write-TextResponse {
@@ -185,10 +245,16 @@ function Invoke-StepStreaming {
         $proc.StartInfo = $psi
         $null = $proc.Start()
 
-        # Stream stdout line by line
+        Write-SessionLog ""
+        Write-SessionLog ("--- {0} :: {1}/{2} ---" -f (Get-Date -Format 'HH:mm:ss'), $ModuleId, $StepId)
+
+        # Stream stdout line by line, teeing each line to the session log.
         while (-not $proc.StandardOutput.EndOfStream) {
             $line = $proc.StandardOutput.ReadLine()
-            if ($null -ne $line) { Send-SSE -Response $Response -Data $line }
+            if ($null -ne $line) {
+                Send-SSE -Response $Response -Data $line
+                Write-SessionLog $line
+            }
         }
 
         # Drain stderr
@@ -198,18 +264,25 @@ function Invoke-StepStreaming {
         if ($errOutput -and $errOutput.Trim().Length -gt 0) {
             foreach ($eline in ($errOutput -split "`r?`n")) {
                 if ($eline.Trim().Length -gt 0) {
-                    Send-SSE -Response $Response -Data "[ERROR] $eline"
+                    $tagged = "[ERROR] $eline"
+                    Send-SSE -Response $Response -Data $tagged
+                    Write-SessionLog $tagged
                 }
             }
         }
 
         if ($proc.ExitCode -ne 0) {
-            Send-SSE -Response $Response -Data "__ERROR__: Step exited with code $($proc.ExitCode)"
+            $exitMsg = "__ERROR__: Step exited with code $($proc.ExitCode)"
+            Send-SSE -Response $Response -Data $exitMsg
+            Write-SessionLog $exitMsg
         }
 
         Send-SSE -Response $Response -Data "__DONE__"
+        Write-SessionLog ("--- {0} :: {1}/{2} done ---" -f (Get-Date -Format 'HH:mm:ss'), $ModuleId, $StepId)
     } catch {
-        Send-SSE -Response $Response -Data "__ERROR__: $($_.Exception.Message)"
+        $errMsg = "__ERROR__: $($_.Exception.Message)"
+        Send-SSE -Response $Response -Data $errMsg
+        Write-SessionLog $errMsg
         Send-SSE -Response $Response -Data "__DONE__"
     } finally {
         try { $Response.OutputStream.Close() } catch {}
