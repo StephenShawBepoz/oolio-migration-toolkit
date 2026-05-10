@@ -16,7 +16,7 @@ const MODULES = [
             { id: 'clear-startup',   title: 'Clear shell:startup',   risk: 'warn',   note: 'Removes everything from the user shell:startup folder. POS terminal only.' },
             { id: 'check-run-key',   title: 'Export & clean HKCU Run key', risk: 'warn', note: 'Exports the entire HKCU Run key to the backup folder (HKCU_Run_<timestamp>.reg), then removes known Bepoz Run keys. Restore the export with reg import if needed.' },
             { id: 'delete-registry', title: 'Delete Bepoz registry', risk: 'danger', note: 'Removes HKCU\\Software\\Backoffice. Make sure the data backup zip exists first.' },
-            { id: 'uninstall',       title: 'Uninstall Bepoz programs', risk: 'danger', note: 'Optional. Calls Win32_Product uninstall for any program containing "Bepoz".' }
+            { id: 'uninstall',       title: 'Consolidate backup & remove Bepoz folder', risk: 'danger', note: 'Bepoz is not a real installed program. Instead: moves any .zip / .reg backups into C:\\Bepoz\\Backup, then deletes every other file and folder under C:\\Bepoz. Aborts if no Bepoz_Data_*.zip is present in the backup folder.' }
         ]
     },
     {

@@ -204,25 +204,64 @@ function Invoke-BepozDeleteRegistry {
 }
 
 function Invoke-BepozUninstall {
-    Write-Section "Uninstalling Bepoz programs"
-    Write-Log "Searching for Bepoz in installed programs..."
+    # Bepoz isn't a real installed program (no MSI / Win32_Product registration), so a
+    # WMI-style uninstall doesn't apply. Instead: consolidate everything we want to
+    # keep into C:\Bepoz\Backup, then delete every other child of C:\Bepoz.
+    Write-Section "Consolidating backup and removing Bepoz install folder"
 
-    $products = @(Get-WmiObject -Class Win32_Product -ErrorAction SilentlyContinue | Where-Object { $_.Name -ilike "*Bepoz*" })
+    $bepozRoot    = "C:\Bepoz"
+    $targetBackup = Join-Path $bepozRoot "Backup"
+    $srcBackup    = Get-BepozRegValue "BackupPath"
 
-    if ($products.Count -eq 0) {
-        Write-Log "No Bepoz programs found in installed programs list."
-        Write-Log "Note: Bepoz may have been installed without WMI registration. Check C:\Bepoz\ manually." "WARN"
+    if (-not (Test-Path $bepozRoot)) {
+        Write-Log "Bepoz root folder not found: $bepozRoot" "WARN"
+        Write-Log "Nothing to do here. Skipping."
         return
     }
 
-    foreach ($p in $products) {
-        Write-Log "Found: $($p.Name) version $($p.Version)"
-        Write-Log "Uninstalling $($p.Name)..."
-        $result = $p.Uninstall()
-        if ($result.ReturnValue -eq 0) {
-            Write-Log "Uninstall complete: $($p.Name)" "OK"
+    Write-Log "Bepoz root: $bepozRoot"
+
+    if (-not (Test-Path $targetBackup)) {
+        New-Item -ItemType Directory -Path $targetBackup -Force | Out-Null
+        Write-Log "Created: $targetBackup" "OK"
+    }
+
+    # If BackupPath registry pointed elsewhere, move .zip and .reg files into the target.
+    if ($srcBackup -and (Test-Path $srcBackup)) {
+        $srcResolved = (Resolve-Path $srcBackup).Path.TrimEnd('\')
+        $tgtResolved = (Resolve-Path $targetBackup).Path.TrimEnd('\')
+        if ($srcResolved -ine $tgtResolved) {
+            Write-Log "Moving backups from $srcBackup -> $targetBackup"
+            foreach ($pattern in @("*.zip", "*.reg")) {
+                Get-ChildItem -Path $srcBackup -Filter $pattern -File -ErrorAction SilentlyContinue | ForEach-Object {
+                    $dest = Join-Path $targetBackup $_.Name
+                    Move-Item -Path $_.FullName -Destination $dest -Force
+                    Write-Log "  Moved: $($_.Name)" "OK"
+                }
+            }
         } else {
-            Write-Log "Uninstall returned code $($result.ReturnValue) for $($p.Name)" "ERROR"
+            Write-Log "BackupPath already resolves to $targetBackup. No move needed."
         }
     }
+
+    # Safety guard: verify a data backup zip is in the target folder before deleting anything.
+    $existingBackups = @(Get-ChildItem -Path $targetBackup -Filter "Bepoz_Data_*.zip" -File -ErrorAction SilentlyContinue)
+    if ($existingBackups.Count -eq 0) {
+        Write-Log "No Bepoz_Data_*.zip backup found in $targetBackup. ABORTING to protect data." "ERROR"
+        Write-Log "Run the zip-data step first, then retry." "WARN"
+        return
+    }
+    Write-Log "Confirmed $($existingBackups.Count) data backup zip(s) in $targetBackup." "OK"
+
+    # Delete every child of C:\Bepoz except the Backup folder.
+    Write-Log "Removing all $bepozRoot contents except Backup..."
+    $removed = 0
+    Get-ChildItem -Path $bepozRoot -Force | Where-Object { $_.Name -ne "Backup" } | ForEach-Object {
+        Write-Log "  Removing: $($_.Name)"
+        Remove-Item -Path $_.FullName -Recurse -Force -ErrorAction SilentlyContinue
+        $removed++
+    }
+
+    Write-Log "Removed $removed item(s) from $bepozRoot." "OK"
+    Write-Log "Final state: $targetBackup retained, all other Bepoz files removed." "OK"
 }
