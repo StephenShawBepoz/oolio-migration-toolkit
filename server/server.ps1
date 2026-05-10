@@ -127,9 +127,19 @@ try {
 } catch {}
 
 # ----- HTTP Listener -----
+# A bind failure here (e.g. http.sys URL ACL conflict) is a method-call exception,
+# which PowerShell treats as non-terminating by default - the script would continue
+# past the failed Start() and print a misleading "Listening on..." line. Wrap it in
+# try/catch and exit so Launch.ps1 sees a clean failure and a clear job-output line.
 $listener = New-Object System.Net.HttpListener
 $listener.Prefixes.Add("http://localhost:$Port/")
-$listener.Start()
+try {
+    $listener.Start()
+} catch {
+    Write-Output "ERROR: Could not bind http://localhost:$Port/ - $($_.Exception.Message)"
+    Write-Output "Another process likely holds this port. Check with: Get-NetTCPConnection -LocalPort $Port -State Listen"
+    exit 1
+}
 Write-Output "Listening on http://localhost:$Port/"
 Write-Output "Session log: $sessionLogPath"
 
