@@ -21,19 +21,28 @@ if (-not (Test-Path $serverScript)) {
 }
 
 # Pick the first port from the candidate list that we can bind to. Some sites
-# already have 8080 taken (Tomcat, Jenkins, dev tools), so we walk a short list
-# rather than failing silently when the default is in use.
+# already have 8080 taken (Tomcat, Jenkins, dev tools, leftover server jobs),
+# so we walk a short list rather than failing silently when the default is in use.
+#
+# We probe with HttpListener (the same API server.ps1 uses) rather than a raw
+# TcpListener because Windows http.sys manages URL ACL reservations separately
+# from the TCP layer - a prefix can be claimed in http.sys even when nothing is
+# actively bound to the TCP port. TcpListener-based probes miss that.
 function Test-PortFree {
     param([int]$Port)
-    $tcp = $null
+    $listener = $null
     try {
-        $tcp = New-Object System.Net.Sockets.TcpListener([System.Net.IPAddress]::Loopback, $Port)
-        $tcp.Start()
+        $listener = New-Object System.Net.HttpListener
+        $listener.Prefixes.Add("http://localhost:$Port/")
+        $listener.Start()
         return $true
     } catch {
         return $false
     } finally {
-        if ($tcp) { try { $tcp.Stop() } catch {} }
+        if ($listener) {
+            if ($listener.IsListening) { try { $listener.Stop() } catch {} }
+            try { $listener.Close() } catch {}
+        }
     }
 }
 
