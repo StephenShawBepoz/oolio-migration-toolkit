@@ -3,18 +3,32 @@
 function Invoke-BepozReadRegistry {
     Write-Section "Reading Bepoz registry configuration"
 
+    $keyPath = "HKCU:\Software\Backoffice"
+
+    if (-not (Test-Path $keyPath)) {
+        Write-Log "Registry key $keyPath not found." "WARN"
+        Write-Log "This terminal may not have Bepoz installed, or it has already been removed." "WARN"
+        Write-Log "Skipping registry read. Steps that need a specific value will report individually when they run." "WARN"
+        return
+    }
+
     $sqlServer  = Get-BepozRegValue "SQL_Server"
     $dataPath   = Get-BepozRegValue "DataPath"
     $backupPath = Get-BepozRegValue "BackupPath"
 
-    if ($sqlServer)  { Write-Log "SQL_Server: $sqlServer" }  else { Write-Log "SQL_Server: NOT FOUND" "WARN" }
-    if ($dataPath)   { Write-Log "DataPath: $dataPath" }      else { Write-Log "DataPath: NOT FOUND" "WARN" }
-    if ($backupPath) { Write-Log "BackupPath: $backupPath" }  else { Write-Log "BackupPath: NOT FOUND" "WARN" }
+    if ($sqlServer)  { Write-Log "SQL_Server: $sqlServer" "OK" }
+    else             { Write-Log "SQL_Server: not present (expected on tills - SQL usually lives on a venue server)" "WARN" }
 
-    if (-not $sqlServer -or -not $dataPath -or -not $backupPath) {
-        Write-Log "One or more required registry values are missing. Confirm this is a Bepoz terminal and retry." "ERROR"
-    } else {
+    if ($dataPath)   { Write-Log "DataPath: $dataPath" "OK" }
+    else             { Write-Log "DataPath: not present" "WARN" }
+
+    if ($backupPath) { Write-Log "BackupPath: $backupPath" "OK" }
+    else             { Write-Log "BackupPath: not present" "WARN" }
+
+    if ($sqlServer -and $dataPath -and $backupPath) {
         Write-Log "All registry values confirmed. Safe to proceed." "OK"
+    } else {
+        Write-Log "Some values missing. Downstream steps that need them will report when they run; this step is informational only." "WARN"
     }
 }
 
