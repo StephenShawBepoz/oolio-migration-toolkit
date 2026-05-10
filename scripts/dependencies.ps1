@@ -30,6 +30,12 @@ function Invoke-DepsCheckChrome {
         return
     }
 
+    if (-not (Test-InstallerSignature -Path $msiPath -ExpectedSubjectLike "*Google LLC*")) {
+        Write-Log "Refusing to run unverified installer. The downloaded MSI may be corrupt or tampered with." "ERROR"
+        Remove-Item -Path $msiPath -Force -ErrorAction SilentlyContinue
+        return
+    }
+
     Write-Log "Installing silently (msiexec /i /qn /norestart)..."
     $proc = Start-Process -FilePath "msiexec.exe" -ArgumentList @("/i", "`"$msiPath`"", "/qn", "/norestart") -PassThru -NoNewWindow
     Wait-ProcessWithHeartbeat -Process $proc -Label "msiexec"
@@ -77,6 +83,12 @@ function Invoke-DepsInstallTeamViewer {
         return
     }
 
+    if (-not (Test-InstallerSignature -Path $installer -ExpectedSubjectLike "*TeamViewer*")) {
+        Write-Log "Refusing to run unverified installer. The downloaded EXE may be corrupt or tampered with." "ERROR"
+        Remove-Item -Path $installer -Force -ErrorAction SilentlyContinue
+        return
+    }
+
     Write-Log "Installing silently (/S)..."
     $proc = Start-Process -FilePath $installer -ArgumentList "/S" -PassThru -NoNewWindow
     Wait-ProcessWithHeartbeat -Process $proc -Label "TeamViewer installer"
@@ -105,18 +117,49 @@ function Invoke-DepsInstallTeamViewer {
 function Invoke-DepsCheckWebView2 {
     Write-Section "Checking Edge WebView2"
 
-    $regPath = "HKLM:\SOFTWARE\WOW6432Node\Microsoft\EdgeUpdate\Clients\{F3017226-FE2A-4295-8BDF-00C3A9A7E4C5}"
+    $regPath   = "HKLM:\SOFTWARE\WOW6432Node\Microsoft\EdgeUpdate\Clients\{F3017226-FE2A-4295-8BDF-00C3A9A7E4C5}"
     $installed = Get-ItemProperty -Path $regPath -ErrorAction SilentlyContinue
 
     if ($installed) {
         Write-Log "Edge WebView2 is installed." "OK"
         Write-Log "Version: $($installed.pv)"
-    } else {
-        Write-Log "Edge WebView2 not found." "WARN"
-        Write-Log "Required for Windows native Oolio POS and CDS applications."
-        Write-Log "Download the Evergreen Bootstrapper from Microsoft and run with: MicrosoftEdgeWebview2Setup.exe /silent /install"
-        Start-Process "https://developer.microsoft.com/en-us/microsoft-edge/webview2/"
-        Write-Log "Download page opened in browser."
+        return
     }
+
+    Write-Log "Edge WebView2 not found. Downloading Evergreen Bootstrapper..." "WARN"
+
+    $url       = "https://go.microsoft.com/fwlink/p/?LinkId=2124703"
+    $installer = Join-Path $env:TEMP "MicrosoftEdgeWebview2Setup.exe"
+
+    Write-Log "Source: $url"
+    if (-not (Invoke-DownloadWithHeartbeat -Url $url -OutFile $installer)) {
+        Write-Log "The terminal needs internet at this point. Re-run when connectivity is available." "WARN"
+        return
+    }
+
+    if (-not (Test-InstallerSignature -Path $installer -ExpectedSubjectLike "*Microsoft Corporation*")) {
+        Write-Log "Refusing to run unverified installer. The downloaded EXE may be corrupt or tampered with." "ERROR"
+        Remove-Item -Path $installer -Force -ErrorAction SilentlyContinue
+        return
+    }
+
+    Write-Log "Installing silently (/silent /install)..."
+    $proc = Start-Process -FilePath $installer -ArgumentList @("/silent", "/install") -PassThru -NoNewWindow
+    Wait-ProcessWithHeartbeat -Process $proc -Label "WebView2 installer"
+
+    if ($proc.ExitCode -eq 0) {
+        $installed = Get-ItemProperty -Path $regPath -ErrorAction SilentlyContinue
+        if ($installed) {
+            Write-Log "Edge WebView2 installed successfully." "OK"
+            Write-Log "Version: $($installed.pv)"
+        } else {
+            Write-Log "Installer reported success but the EdgeUpdate Clients registry key is still missing." "WARN"
+            Write-Log "WebView2 may need a reboot to register, or the bootstrapper failed silently. Check Programs and Features." "WARN"
+        }
+    } else {
+        Write-Log "WebView2 installer exited with code $($proc.ExitCode)." "ERROR"
+    }
+
+    Remove-Item -Path $installer -Force -ErrorAction SilentlyContinue
 }
 

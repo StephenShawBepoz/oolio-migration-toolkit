@@ -65,7 +65,7 @@ const MODULES = [
         showInTypes: ['ST'],
         steps: [
             { id: 'check-chrome',      title: 'Check / install Google Chrome', risk: 'safe', showInTypes: ['ST'], note: 'Reports Chrome install path and version. If Chrome is missing, downloads the Google Enterprise MSI and installs it silently (msiexec /qn). Requires internet at this step.' },
-            { id: 'check-webview2',    title: 'Check Edge WebView2', risk: 'safe', showInTypes: ['ST'], note: 'Required for Windows native Oolio POS and CDS apps. Opens download page if missing.' },
+            { id: 'check-webview2',    title: 'Check / install Edge WebView2', risk: 'safe', showInTypes: ['ST'], note: 'Required for Windows native Oolio POS and CDS apps. If missing, downloads the Microsoft Evergreen Bootstrapper and installs silently (/silent /install). Requires internet at this step.' },
             { id: 'teamviewer',        title: 'Check / install TeamViewer', risk: 'safe', showInTypes: ['ST'], note: 'Reports TeamViewer install path and version. If missing, downloads the full TeamViewer installer (TeamViewer_Setup_x64.exe) and installs silently with /S. Requires internet at this step.' },
             { id: 'printer-utilities', title: 'Printer utilities',   risk: 'safe', showInTypes: ['ST'], linksOnly: true,
               links: [
