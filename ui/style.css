@@ -132,7 +132,161 @@ input[type="text"]:focus { outline: 2px solid var(--oolio-purple); outline-offse
   transition: width 0.3s ease;
 }
 
-/* ---------- Module cards ---------- */
+/* ---------- Migrate CTA on home ---------- */
+.migrate-cta {
+  margin: 24px 0 28px;
+  text-align: center;
+}
+.migrate-cta-button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 16px;
+  padding: 22px 56px;
+  background: var(--oolio-purple);
+  color: white;
+  border: none;
+  border-radius: 14px;
+  font-size: 22px;
+  font-weight: 700;
+  cursor: pointer;
+  box-shadow: 0 8px 24px rgba(98, 57, 177, 0.25);
+  transition: transform 0.06s, box-shadow 0.15s, background 0.15s;
+}
+.migrate-cta-button:hover:not(:disabled) {
+  background: #4f2e93;
+  box-shadow: 0 10px 28px rgba(98, 57, 177, 0.35);
+}
+.migrate-cta-button:active:not(:disabled) { transform: scale(0.98); }
+.migrate-cta-button:disabled { opacity: 0.5; cursor: not-allowed; box-shadow: none; }
+.migrate-cta-arrow { font-size: 24px; }
+.migrate-cta-sub {
+  margin-top: 12px;
+  color: var(--text-secondary);
+  font-size: 13px;
+}
+
+/* ---------- Module jump buttons (home secondary) ---------- */
+.module-jump-section { margin-top: 32px; }
+.module-jump-header {
+  font-size: 12px;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--text-muted);
+  margin-bottom: 12px;
+  font-weight: 600;
+}
+.module-jump-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  gap: 12px;
+}
+.module-jump {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  padding: 14px 16px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  cursor: pointer;
+  text-align: left;
+  transition: border-color 0.15s, background 0.15s;
+  font-family: inherit;
+}
+.module-jump:hover { border-color: var(--oolio-purple); background: var(--bg); }
+.module-jump-icon {
+  width: 32px; height: 32px;
+  background: var(--oolio-purple-light);
+  color: var(--oolio-purple);
+  border-radius: 8px;
+  display: flex; align-items: center; justify-content: center;
+  font-weight: 700;
+  flex-shrink: 0;
+}
+.module-jump-text { display: flex; flex-direction: column; gap: 2px; }
+.module-jump-title { font-weight: 600; font-size: 14px; color: var(--text-primary); }
+.module-jump-meta  { font-size: 12px; color: var(--text-muted); }
+
+/* ---------- Migrate view ---------- */
+.migrate-progress {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 16px 20px;
+  margin-bottom: 20px;
+}
+.migrate-now {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  padding: 24px;
+  margin-bottom: 16px;
+}
+.migrate-now-label {
+  font-size: 12px;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--oolio-purple);
+  font-weight: 600;
+  margin-bottom: 8px;
+}
+.migrate-now-title {
+  font-size: 20px;
+  font-weight: 700;
+  margin-bottom: 16px;
+}
+.migrate-pause {
+  background: var(--surface);
+  border: 2px solid var(--oolio-purple);
+  border-radius: 12px;
+  padding: 24px;
+  margin-bottom: 16px;
+  box-shadow: 0 4px 20px rgba(98, 57, 177, 0.10);
+}
+.migrate-pause-title {
+  font-size: 18px;
+  font-weight: 700;
+  margin-bottom: 8px;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+.migrate-pause-note {
+  color: var(--text-secondary);
+  margin-bottom: 16px;
+  line-height: 1.55;
+}
+.migrate-status {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  padding: 32px 24px;
+  text-align: center;
+}
+.migrate-status-icon {
+  width: 56px; height: 56px;
+  margin: 0 auto 16px;
+  border-radius: 50%;
+  background: var(--bg);
+  color: var(--text-secondary);
+  display: flex; align-items: center; justify-content: center;
+  font-size: 24px;
+  font-weight: 700;
+}
+.migrate-status-icon.ok { background: var(--safe-bg); color: var(--ok-text); }
+.migrate-status-title {
+  font-size: 20px;
+  font-weight: 700;
+  margin-bottom: 8px;
+}
+.migrate-status-sub {
+  color: var(--text-secondary);
+  margin-bottom: 20px;
+}
+.migrate-status .step-actions { justify-content: center; }
+
+/* ---------- Module cards (legacy module-grid kept for module view internals) ---------- */
 .module-grid {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));

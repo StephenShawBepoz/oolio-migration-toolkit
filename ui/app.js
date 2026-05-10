@@ -76,7 +76,7 @@ const MODULES = [
             { id: 'install-cds-chrome', title: 'Create Oolio CDS shortcut (Chrome kiosk)', risk: 'safe', note: 'Public-desktop shortcut launching cds.oolio.io on the second display.', showWhen: m => m.terminalType === 'POS' && m.deploymentMode === 'chrome' && m.hasCDS === true },
             { id: 'install-kds-chrome', title: 'Create Oolio KDS shortcut (Chrome kiosk)', risk: 'safe', note: 'Public-desktop shortcut launching kds.oolio.io fullscreen.', showWhen: m => m.terminalType === 'KDS' },
             { id: 'set-startup',        title: 'Configure startup',          risk: 'warn', note: 'Copies the Oolio desktop shortcut(s) into shell:startup so the kiosk launches when the autologon user signs in. Also tidies up legacy HKCU Run entries from older toolkit builds.' },
-            { id: 'final-restart',      title: 'Schedule final restart',     risk: 'warn', note: 'Schedules a 30-second restart. Run "shutdown /a" to cancel.' }
+            { id: 'final-restart',      title: 'Schedule final restart',     risk: 'danger', note: 'Schedules a 30-second restart so the device rename, wallpaper, and autologon registry changes take effect. Run "shutdown /a" from a command prompt to cancel after it has scheduled.' }
         ]
     }
 ];
@@ -91,7 +91,17 @@ let state = {
     runningStep: null,
     outputLog: {},
     inputValues: {},
-    confirmTicked: {}
+    confirmTicked: {},
+    migrate: {
+        active: false,
+        aborted: false,
+        currentAction: null,   // { type, moduleId, stepId, stepDef, moduleDef }
+        errorState: false,
+        done: false,
+        // Promise resolver/rejecter set up while waiting for user action at a pause.
+        resolve: null,
+        reject: null
+    }
 };
 
 // ---------- Boot ----------
@@ -163,6 +173,181 @@ function setStepStatus(moduleId, stepId, status) {
     state.progress[moduleId] = state.progress[moduleId] || {};
     state.progress[moduleId][stepId] = status;
     saveProgress();
+}
+
+// ---------- Migrate flow planner ----------
+//
+// Walks every module's visible steps in order and classifies each pending step as:
+//   - auto-run   : safe enough to run unattended in the migrate loop
+//   - pause-form : needs technician input via inputs (verify-autologon, rename-device)
+//   - pause-config: terminal-type configuration form
+//   - pause-manual: link-only step that needs the technician to do something off-script
+//   - pause-confirm: danger step requiring a confirmation tick before running
+
+function classifyStep(step) {
+    if (step.configStep)            return 'pause-config';
+    if (step.linksOnly)             return 'pause-manual';
+    if (step.requiresInputs && step.requiresInputs.length > 0) return 'pause-form';
+    if (step.risk === 'danger')     return 'pause-confirm';
+    return 'auto-run';
+}
+
+function getNextMigrateAction() {
+    for (const mod of MODULES) {
+        const visible = getVisibleSteps(mod);
+        for (const step of visible) {
+            const status = getStepStatus(mod.id, step.id);
+            if (status === 'complete' || status === 'skipped') continue;
+            return {
+                type: classifyStep(step),
+                moduleId: mod.id,
+                stepId: step.id,
+                stepDef: step,
+                moduleDef: mod
+            };
+        }
+    }
+    return null;
+}
+
+function getStepExtras(stepId) {
+    const meta = getMeta();
+    if (stepId === 'rename-device') {
+        return { value: state.inputValues['windows.rename-device.value'] || '' };
+    }
+    if (stepId === 'set-startup') {
+        return { value: meta.terminalType || '' };
+    }
+    if (stepId === 'verify-autologon') {
+        const k = 'windows.verify-autologon';
+        return {
+            username: state.inputValues[k + '.username'] || '',
+            password: state.inputValues[k + '.password'] || '',
+            domain:   state.inputValues[k + '.domain']   || ''
+        };
+    }
+    return {};
+}
+
+function waitForMigrateUser() {
+    return new Promise((resolve, reject) => {
+        state.migrate.resolve = resolve;
+        state.migrate.reject = reject;
+    });
+}
+
+async function startMigrate() {
+    state.view = 'migrate';
+    state.migrate.active = true;
+    state.migrate.aborted = false;
+    state.migrate.done = false;
+    state.migrate.errorState = false;
+    state.migrate.currentAction = null;
+    render();
+    runMigrateLoop();
+}
+
+function abortMigrate() {
+    state.migrate.aborted = true;
+    if (state.migrate.reject) {
+        const r = state.migrate.reject;
+        state.migrate.resolve = null;
+        state.migrate.reject = null;
+        r(new Error('aborted'));
+    }
+    state.migrate.active = false;
+    render();
+}
+
+function resolveMigrateWait(skipped = false) {
+    if (state.migrate.resolve) {
+        const r = state.migrate.resolve;
+        state.migrate.resolve = null;
+        state.migrate.reject = null;
+        r({ skipped });
+    }
+}
+
+async function runMigrateLoop() {
+    while (true) {
+        if (state.migrate.aborted) return;
+
+        const next = getNextMigrateAction();
+        if (!next) {
+            state.migrate.active = false;
+            state.migrate.done = true;
+            state.migrate.currentAction = null;
+            render();
+            return;
+        }
+
+        state.migrate.currentAction = next;
+        state.migrate.errorState = false;
+        render();
+
+        if (next.type === 'auto-run') {
+            await runStep(next.moduleId, next.stepId, getStepExtras(next.stepId));
+            await new Promise(r => setTimeout(r, 350));
+
+            const status = getStepStatus(next.moduleId, next.stepId);
+            if (status === 'error') {
+                state.migrate.errorState = true;
+                render();
+                try {
+                    await waitForMigrateUser();
+                } catch (e) {
+                    return; // aborted
+                }
+                state.migrate.errorState = false;
+            }
+            continue;
+        }
+
+        // Pause types - render the pause UI and wait for the user.
+        try {
+            const result = await waitForMigrateUser();
+            // After the user resolves the wait, the step is either marked complete/skipped
+            // by the action handler (continueMigrateStep / skipMigrateStep). The loop just
+            // re-evaluates getNextMigrateAction on the next iteration.
+            if (result && result.skipped) {
+                setStepStatus(next.moduleId, next.stepId, 'skipped');
+            }
+        } catch (e) {
+            return; // aborted
+        }
+    }
+}
+
+// Called by the "Continue" button on a pause card.
+async function continueMigrateStep() {
+    const next = state.migrate.currentAction;
+    if (!next) return;
+
+    if (next.type === 'pause-config') {
+        // The config form's Save button has already written meta + marked the step complete.
+        resolveMigrateWait();
+        return;
+    }
+    if (next.type === 'pause-manual') {
+        setStepStatus(next.moduleId, next.stepId, 'complete');
+        resolveMigrateWait();
+        return;
+    }
+
+    // pause-form / pause-confirm: run the step now, then resolve
+    await runStep(next.moduleId, next.stepId, getStepExtras(next.stepId));
+    resolveMigrateWait();
+}
+
+function skipMigrateStep() {
+    resolveMigrateWait(true);
+}
+
+function retryMigrateStep() {
+    // Clear the error and re-run the same step.
+    state.migrate.errorState = false;
+    setStepStatus(state.migrate.currentAction.moduleId, state.migrate.currentAction.stepId, 'pending');
+    resolveMigrateWait();
 }
 
 // ---------- SSE step runner ----------
@@ -265,21 +450,27 @@ function renderOverallProgress() {
 }
 
 function renderHome() {
-    const cards = MODULES.map(mod => {
+    const overall = getOverallProgress();
+    const hasProgress = overall.done > 0 && overall.done < overall.total;
+    const isComplete = overall.total > 0 && overall.done === overall.total;
+    const ctaLabel = isComplete ? 'Migration complete' : (hasProgress ? 'Resume migration' : 'Migrate');
+    const ctaSub = isComplete
+        ? 'All steps marked complete or skipped.'
+        : (hasProgress
+            ? `Picks up at the next pending step (${overall.done} of ${overall.total} done).`
+            : 'Walks the full Bepoz → Windows → Dependencies → Oolio flow. Pauses for input when needed.');
+
+    const moduleButtons = MODULES.map(mod => {
         const p = getModuleProgress(mod);
-        const pct = p.total === 0 ? 0 : Math.round((p.done / p.total) * 100);
-        const isComplete = p.total > 0 && p.done === p.total;
+        const done = p.total > 0 && p.done === p.total;
         return `
-          <div class="module-card" data-module="${mod.id}">
-            <div class="module-card-head">
-              <div class="module-icon">${mod.icon}</div>
-              ${isComplete ? '<span class="complete-badge">COMPLETE</span>' : ''}
-            </div>
-            <div class="module-name">${escapeHtml(mod.name)}</div>
-            <div class="module-desc">${escapeHtml(mod.description)}</div>
-            <div class="module-progress-text">${p.done} of ${p.total} steps</div>
-            <div class="progress-track"><div class="progress-fill" style="width:${pct}%"></div></div>
-          </div>`;
+          <button class="module-jump" data-module="${mod.id}">
+            <span class="module-jump-icon">${mod.icon}</span>
+            <span class="module-jump-text">
+              <span class="module-jump-title">${escapeHtml(mod.name)}</span>
+              <span class="module-jump-meta">${p.done} / ${p.total}${done ? ' · complete' : ''}</span>
+            </span>
+          </button>`;
     }).join('');
 
     return `
@@ -290,7 +481,182 @@ function renderHome() {
         </div>
       </div>
       ${renderOverallProgress()}
-      <div class="module-grid">${cards}</div>
+
+      <div class="migrate-cta">
+        <button class="migrate-cta-button" id="start-migrate" ${isComplete ? 'disabled' : ''}>
+          <span class="migrate-cta-label">${escapeHtml(ctaLabel)}</span>
+          <span class="migrate-cta-arrow">→</span>
+        </button>
+        <div class="migrate-cta-sub">${escapeHtml(ctaSub)}</div>
+      </div>
+
+      <div class="module-jump-section">
+        <div class="module-jump-header">Or jump to a specific module</div>
+        <div class="module-jump-grid">${moduleButtons}</div>
+      </div>
+    `;
+}
+
+// ---------- Migrate view ----------
+
+function renderPauseCard(action) {
+    const step = action.stepDef;
+    const moduleDef = action.moduleDef;
+    const key = action.moduleId + '.' + action.stepId;
+    const isDanger = step.risk === 'danger';
+    const confirmed = state.confirmTicked[key] === true;
+
+    if (action.type === 'pause-config') {
+        return `
+          <div class="migrate-pause">
+            <div class="migrate-pause-title">Configure terminal</div>
+            <div class="migrate-pause-note">${escapeHtml(step.note || '')}</div>
+            ${renderConfigStep()}
+            <div class="step-actions">
+              <button class="btn-ghost" data-migrate-action="skip">Skip</button>
+              <button class="btn-ghost" data-migrate-action="abort">Stop migration</button>
+            </div>
+          </div>`;
+    }
+
+    if (action.type === 'pause-manual') {
+        const linksHtml = step.links ? `
+          <ul class="links-list">
+            ${step.links.map(l => `<li><a href="${escapeHtml(l.href)}" target="_blank" rel="noopener">${escapeHtml(l.label)}</a></li>`).join('')}
+          </ul>` : '';
+        return `
+          <div class="migrate-pause">
+            <div class="migrate-pause-title">${escapeHtml(step.title)}</div>
+            <div class="migrate-pause-note">${escapeHtml(step.note || '')}</div>
+            ${linksHtml}
+            <div class="step-actions">
+              <button class="btn-primary" data-migrate-action="continue">Mark done & continue</button>
+              <button class="btn-ghost" data-migrate-action="skip">Skip</button>
+              <button class="btn-ghost" data-migrate-action="abort">Stop migration</button>
+            </div>
+          </div>`;
+    }
+
+    // pause-form / pause-confirm: show inputs and / or danger checkbox, then Run & continue.
+    const inputs = step.requiresInputs || [];
+    const requiredFieldsFilled = inputs.every(inp => {
+        if (action.stepId === 'rename-device' && inp.name === 'value') {
+            const v = state.inputValues[key + '.' + inp.name] || '';
+            return v.trim().length > 0;
+        }
+        return true;
+    });
+    const runDisabled = (isDanger && !confirmed) || !requiredFieldsFilled;
+
+    const inputHtml = inputs.length > 0 ? `
+      <div class="step-inputs">
+        ${inputs.map(inp => {
+            const fieldKey = key + '.' + inp.name;
+            const val = state.inputValues[fieldKey] || '';
+            const inputType = inp.type === 'password' ? 'password' : 'text';
+            return `
+              <label class="step-input-field">
+                <span class="step-input-label">${escapeHtml(inp.label)}</span>
+                <span class="step-input-row">
+                  ${inp.prefix ? `<span class="step-input-prefix">${escapeHtml(inp.prefix)}</span>` : ''}
+                  <input type="${inputType}" data-step-input="${fieldKey}" value="${escapeHtml(val)}" placeholder="${escapeHtml(inp.placeholder || '')}" autocomplete="off" />
+                </span>
+              </label>`;
+        }).join('')}
+      </div>` : '';
+
+    const dangerWarning = isDanger ? `
+      <div class="step-danger-warning">This action is destructive and cannot be undone. Make sure the data backup is complete.</div>
+      <label class="step-confirm">
+        <input type="checkbox" data-step-confirm="${key}" ${confirmed ? 'checked' : ''}>
+        I confirm this action is intentional and the data backup is complete.
+      </label>` : '';
+
+    return `
+      <div class="migrate-pause">
+        <div class="migrate-pause-title">${escapeHtml(step.title)} <span class="risk-dot risk-${step.risk}"></span></div>
+        <div class="migrate-pause-note">${escapeHtml(step.note || '')}</div>
+        ${dangerWarning}
+        ${inputHtml}
+        <div class="step-actions">
+          <button class="btn-primary" data-migrate-action="continue" ${runDisabled ? 'disabled' : ''}>Run & continue</button>
+          <button class="btn-ghost" data-migrate-action="skip">Skip</button>
+          <button class="btn-ghost" data-migrate-action="abort">Stop migration</button>
+        </div>
+      </div>`;
+}
+
+function renderMigrate() {
+    const overall = getOverallProgress();
+    const pct = overall.total === 0 ? 0 : Math.round((overall.done / overall.total) * 100);
+    const action = state.migrate.currentAction;
+
+    let centerHtml = '';
+
+    if (state.migrate.done) {
+        centerHtml = `
+          <div class="migrate-status">
+            <div class="migrate-status-icon ok">✓</div>
+            <div class="migrate-status-title">Migration complete</div>
+            <div class="migrate-status-sub">Every visible step is complete or skipped. Restart the terminal if the final-restart step didn't already.</div>
+            <div class="step-actions">
+              <button class="btn-secondary" id="back-home">Back to home</button>
+            </div>
+          </div>`;
+    } else if (!action) {
+        centerHtml = `
+          <div class="migrate-status">
+            <div class="migrate-status-icon">…</div>
+            <div class="migrate-status-title">Starting migration</div>
+          </div>`;
+    } else if (state.migrate.errorState) {
+        centerHtml = `
+          <div class="migrate-pause">
+            <div class="migrate-pause-title">Step reported an error: ${escapeHtml(action.stepDef.title)}</div>
+            <div class="migrate-pause-note">Review the output below. Retry, skip, or stop the migration.</div>
+            ${renderOutputLog(action.moduleId, action.stepId)}
+            <div class="step-actions">
+              <button class="btn-primary" data-migrate-action="retry">Retry step</button>
+              <button class="btn-secondary" data-migrate-action="skip">Skip step</button>
+              <button class="btn-ghost" data-migrate-action="abort">Stop migration</button>
+            </div>
+          </div>`;
+    } else if (action.type === 'auto-run') {
+        const isRunning = state.runningStep === (action.moduleId + '.' + action.stepId);
+        centerHtml = `
+          <div class="migrate-now">
+            <div class="migrate-now-label">${isRunning ? 'Running' : 'Preparing'} - ${escapeHtml(action.moduleDef.name)}</div>
+            <div class="migrate-now-title">${escapeHtml(action.stepDef.title)}</div>
+            ${renderOutputLog(action.moduleId, action.stepId)}
+            <div class="step-actions">
+              <button class="btn-ghost" data-migrate-action="abort">Stop migration</button>
+            </div>
+          </div>`;
+    } else {
+        centerHtml = `
+          <div class="migrate-now-label">Action needed - ${escapeHtml(action.moduleDef.name)}</div>
+          ${renderPauseCard(action)}
+        `;
+    }
+
+    return `
+      <div class="app-header">
+        <div class="app-title">
+          <div class="app-title-dot"></div>
+          <div>Oolio Migration Toolkit</div>
+        </div>
+        <button class="btn-secondary" id="back-home">← Home</button>
+      </div>
+
+      <div class="migrate-progress">
+        <div class="overall-progress-label">
+          <span>Migration progress</span>
+          <span>${overall.done} of ${overall.total}</span>
+        </div>
+        <div class="progress-track"><div class="progress-fill" style="width:${pct}%"></div></div>
+      </div>
+
+      ${centerHtml}
     `;
 }
 
@@ -490,6 +856,9 @@ function render() {
     if (state.view === 'home') {
         app.innerHTML = renderHome();
         attachHomeHandlers();
+    } else if (state.view === 'migrate') {
+        app.innerHTML = renderMigrate();
+        attachMigrateHandlers();
     } else {
         app.innerHTML = renderModule();
         attachModuleHandlers();
@@ -499,12 +868,81 @@ function render() {
 // ---------- Event handlers ----------
 
 function attachHomeHandlers() {
-    document.querySelectorAll('.module-card').forEach(card => {
-        card.addEventListener('click', () => {
-            state.activeModule = card.dataset.module;
+    const start = document.getElementById('start-migrate');
+    if (start) start.addEventListener('click', () => startMigrate());
+
+    document.querySelectorAll('.module-jump').forEach(btn => {
+        btn.addEventListener('click', () => {
+            state.activeModule = btn.dataset.module;
             state.view = 'module';
             render();
         });
+    });
+}
+
+function attachMigrateHandlers() {
+    const back = document.getElementById('back-home');
+    if (back) back.addEventListener('click', () => {
+        if (state.migrate.active && !state.migrate.done) {
+            if (!confirm('Migration is in progress. Stop it and return to home?')) return;
+            abortMigrate();
+        }
+        state.view = 'home';
+        state.migrate.currentAction = null;
+        state.migrate.active = false;
+        state.migrate.done = false;
+        render();
+    });
+
+    // Inputs (verify-autologon, rename-device) - same handler as module view.
+    document.querySelectorAll('[data-step-input]').forEach(el => {
+        el.addEventListener('input', (e) => {
+            state.inputValues[el.dataset.stepInput] = e.target.value;
+        });
+    });
+
+    document.querySelectorAll('[data-step-confirm]').forEach(el => {
+        el.addEventListener('change', (e) => {
+            state.confirmTicked[el.dataset.stepConfirm] = e.target.checked;
+            render();
+        });
+    });
+
+    document.querySelectorAll('[data-migrate-action]').forEach(btn => {
+        btn.addEventListener('click', () => {
+            const action = btn.dataset.migrateAction;
+            if (action === 'continue') continueMigrateStep();
+            else if (action === 'skip') skipMigrateStep();
+            else if (action === 'retry') retryMigrateStep();
+            else if (action === 'abort') {
+                if (confirm('Stop the migration?')) abortMigrate();
+            }
+        });
+    });
+
+    // The Save button on the embedded config form.
+    const save = document.getElementById('config-save');
+    if (save) save.addEventListener('click', () => {
+        const tt = document.querySelector('input[name="terminalType"]:checked');
+        const dm = document.querySelector('input[name="deploymentMode"]:checked');
+        const cds = document.querySelector('input[name="hasCDS"]:checked');
+        if (!tt) { alert('Select a terminal type.'); return; }
+        state.progress.meta = state.progress.meta || {};
+        state.progress.meta.terminalType = tt.value;
+        if (tt.value === 'POS') {
+            state.progress.meta.deploymentMode = dm ? dm.value : 'chrome';
+            state.progress.meta.hasCDS = cds ? (cds.value === 'yes') : false;
+        } else {
+            state.progress.meta.deploymentMode = 'chrome';
+            state.progress.meta.hasCDS = false;
+        }
+        setStepStatus('oolio', 'terminal-type', 'complete');
+        // In migrate mode, advance the loop; in module mode, just re-render.
+        if (state.view === 'migrate') {
+            resolveMigrateWait();
+        } else {
+            render();
+        }
     });
 }
 
