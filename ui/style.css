@@ -132,6 +132,86 @@ input[type="text"]:focus { outline: 2px solid var(--oolio-purple); outline-offse
   transition: width 0.3s ease;
 }
 
+/* ---------- Terminal type selector ---------- */
+.select-type { padding: 8px 0 32px; }
+.select-type-heading { font-size: 24px; margin-bottom: 6px; }
+.select-type-sub { color: var(--text-secondary); margin: 6px 0 24px; }
+.select-type-warning {
+  margin-top: 16px;
+  background: var(--warn-bg);
+  color: var(--warn-text);
+  padding: 12px 14px;
+  border-radius: 8px;
+  font-size: 13px;
+}
+.terminal-type-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  gap: 14px;
+}
+.terminal-type-card {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 22px 20px;
+  text-align: left;
+  background: var(--surface);
+  border: 2px solid var(--border);
+  border-radius: 12px;
+  cursor: pointer;
+  font-family: inherit;
+  transition: border-color 0.15s, background 0.15s, transform 0.05s;
+}
+.terminal-type-card:hover { border-color: var(--oolio-purple); background: var(--bg); }
+.terminal-type-card:active { transform: scale(0.99); }
+.terminal-type-card.selected {
+  border-color: var(--oolio-purple);
+  background: var(--oolio-purple-light);
+}
+.terminal-type-code {
+  font-size: 28px;
+  font-weight: 800;
+  color: var(--oolio-purple);
+}
+.terminal-type-label {
+  font-size: 15px;
+  font-weight: 700;
+  color: var(--text-primary);
+}
+.terminal-type-desc {
+  font-size: 13px;
+  color: var(--text-secondary);
+  line-height: 1.5;
+}
+
+/* Type indicator pill on home */
+.terminal-type-pill {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 8px 6px 14px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 20px;
+  font-size: 13px;
+}
+.terminal-type-pill-label { color: var(--text-muted); }
+.terminal-type-pill-value { font-weight: 600; color: var(--oolio-purple); }
+
+/* "Optional" badge for steps */
+.step-optional-badge {
+  display: inline-block;
+  padding: 2px 8px;
+  background: var(--bg);
+  color: var(--text-secondary);
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  border-radius: 10px;
+  margin-left: 8px;
+}
+
 /* ---------- Migrate CTA on home ---------- */
 .migrate-cta {
   margin: 24px 0 28px;

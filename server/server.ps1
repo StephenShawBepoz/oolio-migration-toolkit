@@ -19,20 +19,19 @@ $sharedScript  = Join-Path $scriptsPath "shared.ps1"
 function Get-DefaultProgress {
     return @{
         bepoz = @{
-            "read-registry"   = "pending"
-            "stop-sql"        = "pending"
-            "zip-data"        = "pending"
-            "kill-processes"  = "pending"
-            "clear-startup"   = "pending"
-            "check-run-key"   = "pending"
-            "delete-registry" = "pending"
-            "uninstall"       = "pending"
+            "read-registry"        = "pending"
+            "terminate-processes"  = "pending"
+            "stop-sql"             = "pending"
+            "zip-data"             = "pending"
+            "clear-startup"        = "pending"
+            "check-run-key"        = "pending"
+            "delete-registry"      = "pending"
+            "consolidate-backups"  = "pending"
         }
         windows = @{
             "verify-autologon" = "pending"
             "enable-firewall"  = "pending"
             "check-ip"         = "pending"
-            "switch-dhcp"      = "pending"
             "rename-device"    = "pending"
             "clean-desktop"    = "pending"
             "set-wallpaper"    = "pending"
@@ -43,15 +42,12 @@ function Get-DefaultProgress {
             "printer-utilities" = "pending"
         }
         oolio = @{
-            "terminal-type"       = "pending"
-            "create-folders"      = "pending"
-            "install-pos-chrome"  = "pending"
-            "install-pos-app"     = "pending"
-            "install-cds-chrome"  = "pending"
-            "install-cds-app"     = "pending"
-            "install-kds-chrome"  = "pending"
-            "set-startup"         = "pending"
-            "final-restart"       = "pending"
+            "deployment-config"  = "pending"
+            "create-folders"     = "pending"
+            "install-pos-chrome" = "pending"
+            "install-cds-chrome" = "pending"
+            "set-startup"        = "pending"
+            "final-restart"      = "pending"
         }
         meta = @{
             terminalName    = ""
@@ -170,13 +166,9 @@ function Invoke-StepStreaming {
             $argSegment = " -terminalName " + (Quote-PSLiteral $value)
         } elseif ($StepId -eq "set-wallpaper") {
             $argSegment = " -toolkitRoot " + (Quote-PSLiteral $ToolkitRoot)
-        } elseif ($StepId -eq "set-startup") {
-            $argSegment = " -terminalType " + (Quote-PSLiteral $value)
         } elseif ($StepId -eq "verify-autologon") {
             $u = $Params["username"]; $p = $Params["password"]; $d = $Params["domain"]
             $argSegment = " -username " + (Quote-PSLiteral $u) + " -password " + (Quote-PSLiteral $p) + " -domain " + (Quote-PSLiteral $d)
-        } elseif ($StepId -eq "uninstall") {
-            # No argument needed - reads BackupPath from registry directly.
         }
 
         $command = ". '$sharedScript'; . '$moduleScriptPath'; $functionName$argSegment"

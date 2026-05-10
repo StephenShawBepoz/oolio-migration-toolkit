@@ -2,45 +2,58 @@
 
 // ---------- Module + step definitions ----------
 
+// Terminal types are now session-level. They drive which modules / steps are visible.
+// S = Server (no till, no Bepoz folder cleanup)
+// ST = Server Till (everything)
+// T = Till (no SQL / data backup; still has the till cleanup steps)
+
+const TERMINAL_TYPES = [
+    { code: 'S',  label: 'Server',       desc: 'On-premises venue server. Runs SQL Server and holds Bepoz data. No POS interface.' },
+    { code: 'ST', label: 'Server Till',  desc: 'Acts as both venue server and POS terminal. Runs SQL Server, holds Bepoz data, and runs the till.' },
+    { code: 'T',  label: 'Till',         desc: 'POS terminal only. No SQL Server. No Bepoz data stored locally. Connects to the server for data.' }
+];
+
 const MODULES = [
     {
         id: 'bepoz',
         name: 'Bepoz Software',
         icon: '1',
         description: 'Back up data, stop services, and remove the legacy Bepoz install.',
+        showInTypes: ['S', 'ST', 'T'],
         steps: [
-            { id: 'read-registry',   title: 'Read Bepoz registry',   risk: 'safe',   note: 'Reads SQL_Server, DataPath, BackupPath from HKCU\\Software\\Backoffice. No changes made.' },
-            { id: 'stop-sql',        title: 'Stop SQL Server',       risk: 'warn',   note: 'Stops and disables the local MSSQL$<instance> service if present. Skips silently if SQL is on a venue server.' },
-            { id: 'zip-data',        title: 'Zip Bepoz data',        risk: 'safe',   note: 'Compresses the DataPath folder into the BackupPath. Verify the zip exists before continuing.' },
-            { id: 'kill-processes',  title: 'Terminate processes from C:\\Bepoz', risk: 'safe', note: 'Walks every running process and force-stops any whose executable lives under C:\\Bepoz (matches by path, not by process name).' },
-            { id: 'clear-startup',   title: 'Clear shell:startup',   risk: 'warn',   note: 'Removes everything from the user shell:startup folder. POS terminal only.' },
-            { id: 'check-run-key',   title: 'Export & clean HKCU Run key', risk: 'warn', note: 'Exports the entire HKCU Run key to the backup folder (HKCU_Run_<timestamp>.reg), then removes known Bepoz Run keys. Restore the export with reg import if needed.' },
-            { id: 'delete-registry', title: 'Delete Bepoz registry', risk: 'danger', note: 'Removes HKCU\\Software\\Backoffice. Make sure the data backup zip exists first.' },
-            { id: 'uninstall',       title: 'Consolidate backup & remove Bepoz folder', risk: 'danger', note: 'Bepoz is not a real installed program. Instead: moves any .zip / .reg backups into C:\\Bepoz\\Backup, then deletes every other file and folder under C:\\Bepoz. Aborts if no Bepoz_Data_*.zip is present in the backup folder.' }
+            { id: 'read-registry',       title: 'Read Bepoz registry',   risk: 'safe',   showInTypes: ['S','ST','T'], note: 'Reads SQL_Server, DataPath, BackupPath from HKCU\\Software\\Backoffice. No changes made.' },
+            { id: 'terminate-processes', title: 'Terminate processes from C:\\Bepoz', risk: 'safe', showInTypes: ['S','ST','T'], note: 'Walks every running process and force-stops any whose executable lives under C:\\Bepoz (matches by path, not by process name).' },
+            { id: 'stop-sql',            title: 'Stop and disable SQL Server', risk: 'warn', showInTypes: ['S','ST'], note: 'Stops and disables the local MSSQL$<instance> service if present. Server and server-till only.' },
+            { id: 'zip-data',            title: 'Zip Bepoz data',        risk: 'safe',   showInTypes: ['S','ST'], note: 'Compresses the DataPath folder into the BackupPath using .NET ZipFile (no 2 GB limit). Server and server-till only.' },
+            { id: 'clear-startup',       title: 'Clear shell:startup',   risk: 'warn',   showInTypes: ['ST','T'], note: 'Removes everything from the user shell:startup folder. Till and server-till only.' },
+            { id: 'check-run-key',       title: 'Export & clean HKCU Run key', risk: 'warn', showInTypes: ['ST','T'], note: 'Exports the full HKCU Run key to C:\\OolioBackup\\HKCU_Run_<timestamp>.reg, then removes known Bepoz Run entries. Restore with reg import if needed.' },
+            { id: 'delete-registry',     title: 'Delete Bepoz registry', risk: 'danger', showInTypes: ['ST','T'], note: 'Removes HKCU\\Software\\Backoffice. Make sure the data backup is complete first.' },
+            { id: 'consolidate-backups', title: 'Consolidate backups & remove Bepoz folder', risk: 'danger', showInTypes: ['ST','T'],
+              note: 'Moves all .zip files from C:\\Bepoz\\Backup\\ (recursive) to C:\\OolioBackup\\, then removes C:\\Bepoz\\ and all its contents. Aborts if no Bepoz_Data_*.zip ends up in the destination.' }
         ]
     },
     {
         id: 'windows',
         name: 'Windows Settings',
         icon: '2',
-        description: 'Verify autologon, firewall, network, then rename and clean the device.',
+        description: 'Verify autologon, firewall, network, then rename / clean the device.',
+        showInTypes: ['S', 'ST', 'T'],
         steps: [
-            { id: 'verify-autologon', title: 'Verify / enable autologon', risk: 'warn',
+            { id: 'verify-autologon', title: 'Verify & enable autologon', risk: 'warn', showInTypes: ['S','ST','T'],
               requiresInputs: [
                 { name: 'username', label: 'Username', placeholder: 'e.g. POSUser' },
                 { name: 'password', label: 'Password', placeholder: '', type: 'password' },
                 { name: 'domain',   label: 'Domain (optional)', placeholder: 'leave blank for local machine' }
               ],
-              note: 'Reads the Winlogon registry to confirm autologon. If autologon is off and you fill the form, the toolkit writes the autologon registry values. Effective after the final restart. The password is stored in plaintext at HKLM\\Software\\Microsoft\\Windows NT\\CurrentVersion\\Winlogon - this is the standard Windows AutoAdminLogon mechanism.'
+              note: 'Reads the Winlogon registry to confirm autologon. If autologon is off and you fill the form, the toolkit writes the autologon registry values. Password lands in plaintext at HKLM\\Software\\Microsoft\\Windows NT\\CurrentVersion\\Winlogon - standard AutoAdminLogon mechanism.'
             },
-            { id: 'enable-firewall',  title: 'Enable Windows Firewall', risk: 'warn', note: 'Enables firewall for Domain, Private, and Public profiles.' },
-            { id: 'check-ip',         title: 'Check IP configuration', risk: 'safe', note: 'Shows current IP and DHCP status for active adapters.' },
-            { id: 'switch-dhcp',      title: 'Switch to DHCP',     risk: 'warn', note: 'Switches static-IP adapters to DHCP. Skips silently if already DHCP.' },
-            { id: 'rename-device',    title: 'Rename device',      risk: 'warn',
+            { id: 'enable-firewall',  title: 'Enable Windows Firewall', risk: 'warn', showInTypes: ['S','ST','T'], note: 'Enables firewall for Domain, Private, and Public profiles.' },
+            { id: 'check-ip',         title: 'Check IP configuration', risk: 'safe', showInTypes: ['S','ST','T'], note: 'Shows current IP and DHCP status for every active adapter. If a static IP is detected, the migrate flow surfaces a "Switch to DHCP" prompt as an inline action.' },
+            { id: 'rename-device',    title: 'Rename device', risk: 'warn', showInTypes: ['S','ST','T'], optional: true,
               requiresInputs: [{ name: 'value', label: 'Suffix (after "Oolio-")', placeholder: 'POS1', prefix: 'Oolio-' }],
-              note: 'Renames the device to Oolio-<suffix>. Effective after the final restart.' },
-            { id: 'clean-desktop',    title: 'Clean desktop',      risk: 'warn', note: 'Removes everything from user and public desktop. POS terminal only.' },
-            { id: 'set-wallpaper',    title: 'Apply Oolio wallpaper', risk: 'safe', note: 'Copies assets/wallpaper.jpg to C:\\Oolio\\Assets and applies it. Drop wallpaper.jpg into the toolkit assets\\ folder before running.' }
+              note: 'Optional. Renames the device to Oolio-<suffix>. Skip if the device is already correctly named. Effective after the final restart.' },
+            { id: 'clean-desktop',    title: 'Clean desktop',      risk: 'warn', showInTypes: ['ST'], note: 'Removes everything from user and public desktop. Server-till only.' },
+            { id: 'set-wallpaper',    title: 'Apply Oolio wallpaper', risk: 'safe', showInTypes: ['ST'], note: 'Copies assets/wallpaper.jpg to C:\\Oolio\\Assets and applies it. Server-till only.' }
         ]
     },
     {
@@ -48,10 +61,11 @@ const MODULES = [
         name: 'Oolio Dependencies',
         icon: '3',
         description: 'Verify or install Chrome and WebView2, plus printer utility links.',
+        showInTypes: ['ST'],
         steps: [
-            { id: 'check-chrome',      title: 'Check / install Google Chrome', risk: 'safe', note: 'Reports Chrome install path and version. If Chrome is missing, downloads the Google Enterprise MSI and installs it silently (msiexec /qn). Requires internet at this step.' },
-            { id: 'check-webview2',    title: 'Check Edge WebView2', risk: 'safe', note: 'Required for Windows native Oolio POS and CDS apps. Opens download page if missing.' },
-            { id: 'printer-utilities', title: 'Printer utilities',   risk: 'safe', linksOnly: true,
+            { id: 'check-chrome',      title: 'Check / install Google Chrome', risk: 'safe', showInTypes: ['ST'], note: 'Reports Chrome install path and version. If Chrome is missing, downloads the Google Enterprise MSI and installs it silently (msiexec /qn). Requires internet at this step.' },
+            { id: 'check-webview2',    title: 'Check Edge WebView2', risk: 'safe', showInTypes: ['ST'], note: 'Required for Windows native Oolio POS and CDS apps. Opens download page if missing.' },
+            { id: 'printer-utilities', title: 'Printer utilities',   risk: 'safe', showInTypes: ['ST'], linksOnly: true,
               links: [
                 { label: 'Epson TM Utility',                href: 'https://download.epson-biz.com/modules/pos/' },
                 { label: 'Epson Firmware Updater',          href: 'https://download.epson-biz.com/modules/pos/' },
@@ -68,15 +82,15 @@ const MODULES = [
         id: 'oolio',
         name: 'Oolio POS Setup',
         icon: '4',
-        description: 'Configure terminal type, create folders and shortcuts, then schedule the final restart.',
+        description: 'Set deployment options, create folders and shortcuts, schedule the final restart.',
+        showInTypes: ['ST'],
         steps: [
-            { id: 'terminal-type',      title: 'Configure terminal',         risk: 'safe', configStep: true, note: 'Select terminal type and deployment mode. Subsequent steps adapt to your selection.' },
-            { id: 'create-folders',     title: 'Create Oolio folders',       risk: 'safe', note: 'Creates C:\\Oolio and Assets/Certs/Logs subfolders.' },
-            { id: 'install-pos-chrome', title: 'Create Oolio POS shortcut (Chrome kiosk)', risk: 'safe', note: 'Public-desktop shortcut launching pos.oolio.io fullscreen.', showWhen: m => m.terminalType === 'POS' && m.deploymentMode === 'chrome' },
-            { id: 'install-cds-chrome', title: 'Create Oolio CDS shortcut (Chrome kiosk)', risk: 'safe', note: 'Public-desktop shortcut launching cds.oolio.io on the second display.', showWhen: m => m.terminalType === 'POS' && m.deploymentMode === 'chrome' && m.hasCDS === true },
-            { id: 'install-kds-chrome', title: 'Create Oolio KDS shortcut (Chrome kiosk)', risk: 'safe', note: 'Public-desktop shortcut launching kds.oolio.io fullscreen.', showWhen: m => m.terminalType === 'KDS' },
-            { id: 'set-startup',        title: 'Configure startup',          risk: 'warn', note: 'Copies the Oolio desktop shortcut(s) into shell:startup so the kiosk launches when the autologon user signs in. Also tidies up legacy HKCU Run entries from older toolkit builds.' },
-            { id: 'final-restart',      title: 'Schedule final restart',     risk: 'danger', note: 'Schedules a 30-second restart so the device rename, wallpaper, and autologon registry changes take effect. Run "shutdown /a" from a command prompt to cancel after it has scheduled.' }
+            { id: 'deployment-config',  title: 'Deployment options',         risk: 'safe', configStep: true, showInTypes: ['ST'], note: 'Choose deployment mode (Chrome kiosk in v1) and whether a CDS is present.' },
+            { id: 'create-folders',     title: 'Create Oolio folders',       risk: 'safe', showInTypes: ['ST'], note: 'Creates C:\\Oolio and Assets/Certs/Logs subfolders.' },
+            { id: 'install-pos-chrome', title: 'Create Oolio POS shortcut (Chrome kiosk)', risk: 'safe', showInTypes: ['ST'], note: 'Public-desktop shortcut launching pos.oolio.io fullscreen.', showWhen: m => m.deploymentMode === 'chrome' },
+            { id: 'install-cds-chrome', title: 'Create Oolio CDS shortcut (Chrome kiosk)', risk: 'safe', showInTypes: ['ST'], note: 'Public-desktop shortcut launching cds.oolio.io on the second display.', showWhen: m => m.deploymentMode === 'chrome' && m.hasCDS === true },
+            { id: 'set-startup',        title: 'Configure startup',          risk: 'warn', showInTypes: ['ST'], note: 'Copies the Oolio desktop shortcut(s) into shell:startup so the kiosk launches when the autologon user signs in. Also tidies up legacy HKCU Run entries from older toolkit builds.' },
+            { id: 'final-restart',      title: 'Schedule final restart',     risk: 'danger', showInTypes: ['ST'], note: 'Schedules a 30-second restart so the device rename, wallpaper, and autologon changes take effect. Run "shutdown /a" from a command prompt to cancel.' }
         ]
     }
 ];
@@ -114,6 +128,7 @@ window.addEventListener('DOMContentLoaded', async () => {
     } catch (e) {
         state.progress = { meta: {} };
     }
+    if (!state.progress.meta.terminalType) state.view = 'select-type';
     render();
 });
 
@@ -127,11 +142,26 @@ function getStepStatus(moduleId, stepId) {
     return m[stepId] || 'pending';
 }
 
+function getTerminalType() { return getMeta().terminalType || ''; }
+
+function isModuleVisible(moduleDef) {
+    const tt = getTerminalType();
+    if (!tt) return false;
+    if (!moduleDef.showInTypes) return true;
+    return moduleDef.showInTypes.includes(tt);
+}
+
+function getVisibleModules() {
+    return MODULES.filter(isModuleVisible);
+}
+
 function getVisibleSteps(moduleDef) {
     const meta = getMeta();
+    const tt = meta.terminalType || '';
     return moduleDef.steps.filter(step => {
-        if (!step.showWhen) return true;
-        return step.showWhen(meta);
+        if (step.showInTypes && !step.showInTypes.includes(tt)) return false;
+        if (step.showWhen && !step.showWhen(meta)) return false;
+        return true;
     });
 }
 
@@ -148,7 +178,7 @@ function getModuleProgress(moduleDef) {
 
 function getOverallProgress() {
     let done = 0, total = 0;
-    MODULES.forEach(mod => {
+    getVisibleModules().forEach(mod => {
         const p = getModuleProgress(mod);
         done += p.done; total += p.total;
     });
@@ -193,7 +223,7 @@ function classifyStep(step) {
 }
 
 function getNextMigrateAction() {
-    for (const mod of MODULES) {
+    for (const mod of getVisibleModules()) {
         const visible = getVisibleSteps(mod);
         for (const step of visible) {
             const status = getStepStatus(mod.id, step.id);
@@ -211,12 +241,8 @@ function getNextMigrateAction() {
 }
 
 function getStepExtras(stepId) {
-    const meta = getMeta();
     if (stepId === 'rename-device') {
         return { value: state.inputValues['windows.rename-device.value'] || '' };
-    }
-    if (stepId === 'set-startup') {
-        return { value: meta.terminalType || '' };
     }
     if (stepId === 'verify-autologon') {
         const k = 'windows.verify-autologon';
@@ -299,6 +325,27 @@ async function runMigrateLoop() {
                     return; // aborted
                 }
                 state.migrate.errorState = false;
+                continue;
+            }
+
+            // Special-case: after check-ip, scan output for a static-IP detection. If found,
+            // surface an inline "Switch to DHCP" pause-optional card.
+            if (next.stepId === 'check-ip') {
+                const log = state.outputLog['windows.check-ip'] || [];
+                const hasStatic = log.some(l => /DHCP:\s*Disabled/i.test(l));
+                if (hasStatic) {
+                    const switchAction = {
+                        type: 'pause-optional',
+                        moduleId: 'windows',
+                        stepId: 'switch-dhcp',
+                        stepDef: { title: 'Switch to DHCP', risk: 'warn', note: 'A static-IP adapter was detected. Switching to DHCP will briefly drop the network while a new IP is acquired.' },
+                        moduleDef: next.moduleDef,
+                        runLabel: 'Switch to DHCP'
+                    };
+                    state.migrate.currentAction = switchAction;
+                    render();
+                    try { await waitForMigrateUser(); } catch (e) { return; }
+                }
             }
             continue;
         }
@@ -334,7 +381,7 @@ async function continueMigrateStep() {
         return;
     }
 
-    // pause-form / pause-confirm: run the step now, then resolve
+    // pause-form / pause-confirm / pause-optional: run the step, then resolve
     await runStep(next.moduleId, next.stepId, getStepExtras(next.stepId));
     resolveMigrateWait();
 }
@@ -410,8 +457,10 @@ function runStep(moduleId, stepId, extras) {
 // ---------- Auto-chain runners ----------
 
 async function runBepozSafeChain() {
-    // read-registry -> stop-sql -> zip-data -> pause -> kill-processes -> clear-startup
-    const ids = ['read-registry', 'stop-sql', 'zip-data'];
+    // New step order: read-registry -> terminate-processes -> stop-sql -> zip-data -> pause -> clear-startup -> check-run-key
+    const tt = getTerminalType();
+    const ids = ['read-registry', 'terminate-processes'];
+    if (tt === 'S' || tt === 'ST') { ids.push('stop-sql', 'zip-data'); }
     for (const id of ids) {
         const ok = await runStep('bepoz', id);
         if (!ok && id === 'read-registry') {
@@ -419,10 +468,14 @@ async function runBepozSafeChain() {
             return;
         }
     }
-    const proceed = confirm('Backup zip step is complete. Confirm the zip file exists in the backup folder before continuing with kill-processes and clear-startup.');
-    if (!proceed) return;
-    await runStep('bepoz', 'kill-processes');
-    await runStep('bepoz', 'clear-startup');
+    if (tt === 'S' || tt === 'ST') {
+        const proceed = confirm('Backup zip step is complete. Confirm the zip file exists in the backup folder before continuing.');
+        if (!proceed) return;
+    }
+    if (tt === 'ST' || tt === 'T') {
+        await runStep('bepoz', 'clear-startup');
+        await runStep('bepoz', 'check-run-key');
+    }
 }
 
 async function runDepsCheckChain() {
@@ -449,6 +502,33 @@ function renderOverallProgress() {
       </div>`;
 }
 
+function renderSelectType(forChange = false) {
+    const current = getTerminalType();
+    const options = TERMINAL_TYPES.map(t => `
+      <button class="terminal-type-card${current === t.code ? ' selected' : ''}" data-type="${t.code}">
+        <div class="terminal-type-code">${t.code}</div>
+        <div class="terminal-type-label">${escapeHtml(t.label)}</div>
+        <div class="terminal-type-desc">${escapeHtml(t.desc)}</div>
+      </button>
+    `).join('');
+
+    return `
+      <div class="app-header">
+        <div class="app-title">
+          <div class="app-title-dot"></div>
+          <div>Oolio Migration Toolkit</div>
+        </div>
+        ${forChange ? '<button class="btn-secondary" id="cancel-type-change">Cancel</button>' : ''}
+      </div>
+      <div class="select-type">
+        <h2 class="select-type-heading">${forChange ? 'Change terminal type' : 'Select this terminal type'}</h2>
+        <p class="select-type-sub">This drives which modules and steps the toolkit shows. You can change it later from the home page.</p>
+        <div class="terminal-type-grid">${options}</div>
+        ${forChange && current ? '<div class="select-type-warning">Changing the terminal type may make some completed steps no longer relevant. Their status is preserved in progress.json but they will not show in the new module list.</div>' : ''}
+      </div>
+    `;
+}
+
 function renderHome() {
     const overall = getOverallProgress();
     const hasProgress = overall.done > 0 && overall.done < overall.total;
@@ -458,9 +538,10 @@ function renderHome() {
         ? 'All steps marked complete or skipped.'
         : (hasProgress
             ? `Picks up at the next pending step (${overall.done} of ${overall.total} done).`
-            : 'Walks the full Bepoz → Windows → Dependencies → Oolio flow. Pauses for input when needed.');
+            : 'Walks the full migration flow. Pauses for input when needed.');
 
-    const moduleButtons = MODULES.map(mod => {
+    const visibleModules = getVisibleModules();
+    const moduleButtons = visibleModules.map(mod => {
         const p = getModuleProgress(mod);
         const done = p.total > 0 && p.done === p.total;
         return `
@@ -473,11 +554,19 @@ function renderHome() {
           </button>`;
     }).join('');
 
+    const tt = getTerminalType();
+    const ttLabel = (TERMINAL_TYPES.find(t => t.code === tt) || {}).label || '';
+
     return `
       <div class="app-header">
         <div class="app-title">
           <div class="app-title-dot"></div>
           <div>Oolio Migration Toolkit</div>
+        </div>
+        <div class="terminal-type-pill">
+          <span class="terminal-type-pill-label">Type:</span>
+          <span class="terminal-type-pill-value">${escapeHtml(tt)} - ${escapeHtml(ttLabel)}</span>
+          <button class="btn-ghost" id="change-type">Change</button>
         </div>
       </div>
       ${renderOverallProgress()}
@@ -532,6 +621,21 @@ function renderPauseCard(action) {
             <div class="step-actions">
               <button class="btn-primary" data-migrate-action="continue">Mark done & continue</button>
               <button class="btn-ghost" data-migrate-action="skip">Skip</button>
+              <button class="btn-ghost" data-migrate-action="abort">Stop migration</button>
+            </div>
+          </div>`;
+    }
+
+    if (action.type === 'pause-optional') {
+        const runLabel = action.runLabel || ('Run ' + step.title);
+        return `
+          <div class="migrate-pause">
+            <div class="migrate-pause-title">${escapeHtml(step.title)}</div>
+            <div class="migrate-pause-note">${escapeHtml(step.note || '')}</div>
+            ${renderOutputLog(action.moduleId, action.stepId)}
+            <div class="step-actions">
+              <button class="btn-primary" data-migrate-action="continue">${escapeHtml(runLabel)}</button>
+              <button class="btn-secondary" data-migrate-action="skip">Skip</button>
               <button class="btn-ghost" data-migrate-action="abort">Stop migration</button>
             </div>
           </div>`;
@@ -676,27 +780,17 @@ function renderOutputLog(moduleId, stepId) {
 
 function renderConfigStep() {
     const meta = getMeta();
-    const tt = meta.terminalType || '';
-    const dm = meta.deploymentMode || '';
+    const dm = meta.deploymentMode || 'chrome';
     const cds = meta.hasCDS === true;
-    const showDeploymentAndCDS = tt === 'POS';
 
     return `
       <div class="config-form">
-        <h3>Terminal configuration</h3>
-        <div class="form-group">
-          <label class="form-group-label">Terminal type</label>
-          <div class="radio-row">
-            <label><input type="radio" name="terminalType" value="POS" ${tt==='POS'?'checked':''}> POS</label>
-            <label><input type="radio" name="terminalType" value="KDS" ${tt==='KDS'?'checked':''}> KDS</label>
-          </div>
-        </div>
-        ${showDeploymentAndCDS ? `
+        <h3>Deployment options</h3>
         <div class="form-group">
           <label class="form-group-label">Deployment mode</label>
           <div class="radio-row">
             <label><input type="radio" name="deploymentMode" value="chrome" ${dm==='chrome'?'checked':''}> Chrome (kiosk)</label>
-            <label><input type="radio" name="deploymentMode" value="windows" ${dm==='windows'?'checked':''} disabled> Windows app (v2 — not yet available)</label>
+            <label><input type="radio" name="deploymentMode" value="windows" ${dm==='windows'?'checked':''} disabled> Windows app (v2 - not yet available)</label>
           </div>
         </div>
         <div class="form-group">
@@ -705,7 +799,7 @@ function renderConfigStep() {
             <label><input type="radio" name="hasCDS" value="yes" ${cds?'checked':''}> Yes</label>
             <label><input type="radio" name="hasCDS" value="no" ${!cds?'checked':''}> No</label>
           </div>
-        </div>` : ''}
+        </div>
         <div class="step-actions">
           <button class="btn-primary" id="config-save">Save configuration</button>
         </div>
@@ -794,12 +888,14 @@ function renderStep(moduleDef, step, index) {
         }
     }
 
+    const optionalBadge = step.optional ? '<span class="step-optional-badge">optional</span>' : '';
+
     return `
       <div class="step ${expanded ? 'expanded' : ''}" data-step-key="${key}">
         <div class="step-header" data-toggle="${key}">
           <div class="step-num ${stepNumClass}">${stepNumText}</div>
           <div class="step-title-block">
-            <div class="step-title">${escapeHtml(step.title)}</div>
+            <div class="step-title">${escapeHtml(step.title)}${optionalBadge}</div>
             <div class="step-meta">${status.toUpperCase()}</div>
           </div>
           <div class="risk-dot risk-${step.risk}" title="risk: ${step.risk}"></div>
@@ -853,7 +949,10 @@ function renderModule() {
 
 function render() {
     const app = document.getElementById('app');
-    if (state.view === 'home') {
+    if (state.view === 'select-type' || state.view === 'change-type') {
+        app.innerHTML = renderSelectType(state.view === 'change-type');
+        attachSelectTypeHandlers();
+    } else if (state.view === 'home') {
         app.innerHTML = renderHome();
         attachHomeHandlers();
     } else if (state.view === 'migrate') {
@@ -865,11 +964,33 @@ function render() {
     }
 }
 
+function attachSelectTypeHandlers() {
+    document.querySelectorAll('.terminal-type-card').forEach(card => {
+        card.addEventListener('click', () => {
+            const code = card.dataset.type;
+            const previous = getTerminalType();
+            if (previous && previous !== code) {
+                if (!confirm(`Change terminal type from ${previous} to ${code}?\n\nCompleted steps that don't apply to ${code} will no longer appear in the module list. Their status is preserved.`)) return;
+            }
+            state.progress.meta = state.progress.meta || {};
+            state.progress.meta.terminalType = code;
+            saveProgress();
+            state.view = 'home';
+            render();
+        });
+    });
+    const cancel = document.getElementById('cancel-type-change');
+    if (cancel) cancel.addEventListener('click', () => { state.view = 'home'; render(); });
+}
+
 // ---------- Event handlers ----------
 
 function attachHomeHandlers() {
     const start = document.getElementById('start-migrate');
     if (start) start.addEventListener('click', () => startMigrate());
+
+    const change = document.getElementById('change-type');
+    if (change) change.addEventListener('click', () => { state.view = 'change-type'; render(); });
 
     document.querySelectorAll('.module-jump').forEach(btn => {
         btn.addEventListener('click', () => {
@@ -923,21 +1044,12 @@ function attachMigrateHandlers() {
     // The Save button on the embedded config form.
     const save = document.getElementById('config-save');
     if (save) save.addEventListener('click', () => {
-        const tt = document.querySelector('input[name="terminalType"]:checked');
         const dm = document.querySelector('input[name="deploymentMode"]:checked');
         const cds = document.querySelector('input[name="hasCDS"]:checked');
-        if (!tt) { alert('Select a terminal type.'); return; }
         state.progress.meta = state.progress.meta || {};
-        state.progress.meta.terminalType = tt.value;
-        if (tt.value === 'POS') {
-            state.progress.meta.deploymentMode = dm ? dm.value : 'chrome';
-            state.progress.meta.hasCDS = cds ? (cds.value === 'yes') : false;
-        } else {
-            state.progress.meta.deploymentMode = 'chrome';
-            state.progress.meta.hasCDS = false;
-        }
-        setStepStatus('oolio', 'terminal-type', 'complete');
-        // In migrate mode, advance the loop; in module mode, just re-render.
+        state.progress.meta.deploymentMode = dm ? dm.value : 'chrome';
+        state.progress.meta.hasCDS = cds ? (cds.value === 'yes') : false;
+        setStepStatus('oolio', 'deployment-config', 'complete');
         if (state.view === 'migrate') {
             resolveMigrateWait();
         } else {
@@ -979,17 +1091,7 @@ function attachModuleHandlers() {
             const key = btn.dataset.key;
 
             if (action === 'run') {
-                const extra = {};
-                if (stepId === 'rename-device') {
-                    extra.value = state.inputValues[key + '.value'] || '';
-                } else if (stepId === 'set-startup') {
-                    extra.value = (getMeta().terminalType || '');
-                } else if (stepId === 'verify-autologon') {
-                    extra.username = state.inputValues[key + '.username'] || '';
-                    extra.password = state.inputValues[key + '.password'] || '';
-                    extra.domain   = state.inputValues[key + '.domain']   || '';
-                }
-                runStep(moduleId, stepId, extra);
+                runStep(moduleId, stepId, getStepExtras(stepId));
             } else if (action === 'mark-done') {
                 setStepStatus(moduleId, stepId, 'complete');
                 render();
@@ -1011,20 +1113,12 @@ function attachModuleHandlers() {
 
     const save = document.getElementById('config-save');
     if (save) save.addEventListener('click', () => {
-        const tt = document.querySelector('input[name="terminalType"]:checked');
         const dm = document.querySelector('input[name="deploymentMode"]:checked');
         const cds = document.querySelector('input[name="hasCDS"]:checked');
-        if (!tt) { alert('Select a terminal type.'); return; }
         state.progress.meta = state.progress.meta || {};
-        state.progress.meta.terminalType = tt.value;
-        if (tt.value === 'POS') {
-            state.progress.meta.deploymentMode = dm ? dm.value : 'chrome';
-            state.progress.meta.hasCDS = cds ? (cds.value === 'yes') : false;
-        } else {
-            state.progress.meta.deploymentMode = 'chrome';
-            state.progress.meta.hasCDS = false;
-        }
-        setStepStatus('oolio', 'terminal-type', 'complete');
+        state.progress.meta.deploymentMode = dm ? dm.value : 'chrome';
+        state.progress.meta.hasCDS = cds ? (cds.value === 'yes') : false;
+        setStepStatus('oolio', 'deployment-config', 'complete');
         render();
     });
 }

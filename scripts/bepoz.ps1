@@ -80,17 +80,44 @@ function Invoke-BepozZipData {
 
     Write-Log "Source: $dataPath"
     Write-Log "Destination: $zipPath"
-    Write-Log "Compressing..."
+    Write-Log "Compressing (using .NET ZipFile - no 2 GB limit)..."
 
-    Compress-Archive -Path $dataPath -DestinationPath $zipPath -Force -ErrorAction Stop
+    # PowerShell 5.1's Compress-Archive buffers through MemoryStream and chokes on archives
+    # larger than ~2 GB ("Stream was too long"). Use the underlying .NET API directly.
+    if (Test-Path $zipPath) { Remove-Item -Path $zipPath -Force -ErrorAction SilentlyContinue }
+
+    try {
+        Add-Type -AssemblyName System.IO.Compression.FileSystem -ErrorAction SilentlyContinue
+        [System.IO.Compression.ZipFile]::CreateFromDirectory(
+            $dataPath,
+            $zipPath,
+            [System.IO.Compression.CompressionLevel]::Optimal,
+            $false   # do not include the source folder name in the archive root
+        )
+    } catch {
+        Write-Log "Compression failed: $($_.Exception.Message)" "ERROR"
+        if (Test-Path $zipPath) { Remove-Item -Path $zipPath -Force -ErrorAction SilentlyContinue }
+        return
+    }
+
+    if (-not (Test-Path $zipPath)) {
+        Write-Log "Zip file was not created at $zipPath." "ERROR"
+        return
+    }
 
     $size = [math]::Round((Get-Item $zipPath).Length / 1MB, 2)
+    if ($size -le 0) {
+        Write-Log "Zip created but is 0 MB. Treating as failure." "ERROR"
+        Remove-Item -Path $zipPath -Force -ErrorAction SilentlyContinue
+        return
+    }
+
     Write-Log "Backup complete. File size: $size MB" "OK"
     Write-Log "Zip location: $zipPath" "OK"
     Write-Log "IMPORTANT: Verify this file exists and has a non-zero size before proceeding." "WARN"
 }
 
-function Invoke-BepozKillProcesses {
+function Invoke-BepozTerminateProcesses {
     Write-Section "Terminating processes running from C:\Bepoz"
 
     $bepozRoot = "C:\Bepoz"
@@ -159,21 +186,16 @@ function Invoke-BepozCheckRunKey {
     $runPath    = "HKCU:\Software\Microsoft\Windows\CurrentVersion\Run"
     $runPathReg = "HKCU\Software\Microsoft\Windows\CurrentVersion\Run"
 
-    # Export the Run key to the same directory as the data backup, before any changes.
-    $backupPath = Get-BepozRegValue "BackupPath"
-    if (-not $backupPath) {
-        Write-Log "BackupPath not found in HKCU\Software\Backoffice. Cannot export Run key." "ERROR"
-        Write-Log "Run the read-registry step first to confirm the registry is intact." "WARN"
-        return
+    # Export the Run key directly to C:\OolioBackup so it survives the C:\Bepoz cleanup
+    # in the consolidate-backups step.
+    $backupRoot = "C:\OolioBackup"
+    if (-not (Test-Path $backupRoot)) {
+        New-Item -ItemType Directory -Path $backupRoot -Force | Out-Null
+        Write-Log "Created consolidated backup folder: $backupRoot"
     }
 
-    if (-not (Test-Path $backupPath)) {
-        Write-Log "Backup folder does not exist. Creating: $backupPath"
-        New-Item -ItemType Directory -Path $backupPath -Force | Out-Null
-    }
-
-    $timestamp = Get-Date -Format "yyyy-MM-dd_HHmm"
-    $exportFile = Join-Path $backupPath "HKCU_Run_$timestamp.reg"
+    $timestamp  = Get-Date -Format "yyyy-MM-dd_HHmm"
+    $exportFile = Join-Path $backupRoot "HKCU_Run_$timestamp.reg"
 
     Write-Log "Exporting HKCU Run key to: $exportFile"
     reg export $runPathReg $exportFile /y | Out-Null
@@ -232,65 +254,76 @@ function Invoke-BepozDeleteRegistry {
     }
 }
 
-function Invoke-BepozUninstall {
-    # Bepoz isn't a real installed program (no MSI / Win32_Product registration), so a
-    # WMI-style uninstall doesn't apply. Instead: consolidate everything we want to
-    # keep into C:\Bepoz\Backup, then delete every other child of C:\Bepoz.
-    Write-Section "Consolidating backup and removing Bepoz install folder"
+function Invoke-BepozConsolidateBackups {
+    # Move every .zip from C:\Bepoz\Backup\ (and subdirectories) into C:\OolioBackup\,
+    # then remove C:\Bepoz\ entirely. The .reg from check-run-key already lives in
+    # C:\OolioBackup\ so we don't need to relocate it.
+    Write-Section "Consolidating backups and removing Bepoz folder"
 
-    $bepozRoot    = "C:\Bepoz"
-    $targetBackup = Join-Path $bepozRoot "Backup"
-    $srcBackup    = Get-BepozRegValue "BackupPath"
+    $bepozRoot   = "C:\Bepoz"
+    $bepozBackup = Join-Path $bepozRoot "Backup"
+    $oolioBackup = "C:\OolioBackup"
 
-    if (-not (Test-Path $bepozRoot)) {
-        Write-Log "Bepoz root folder not found: $bepozRoot" "WARN"
-        Write-Log "Nothing to do here. Skipping."
-        return
+    if (-not (Test-Path $oolioBackup)) {
+        New-Item -ItemType Directory -Path $oolioBackup -Force | Out-Null
+        Write-Log "Created: $oolioBackup" "OK"
     }
 
-    Write-Log "Bepoz root: $bepozRoot"
-
-    if (-not (Test-Path $targetBackup)) {
-        New-Item -ItemType Directory -Path $targetBackup -Force | Out-Null
-        Write-Log "Created: $targetBackup" "OK"
+    # Find every .zip recursively under C:\Bepoz\Backup\
+    $sourceZips = @()
+    if (Test-Path $bepozBackup) {
+        $sourceZips = @(Get-ChildItem -Path $bepozBackup -Filter "*.zip" -File -Recurse -ErrorAction SilentlyContinue)
+    } else {
+        Write-Log "$bepozBackup does not exist. Nothing to move from there." "WARN"
     }
 
-    # If BackupPath registry pointed elsewhere, move .zip and .reg files into the target.
-    if ($srcBackup -and (Test-Path $srcBackup)) {
-        $srcResolved = (Resolve-Path $srcBackup).Path.TrimEnd('\')
-        $tgtResolved = (Resolve-Path $targetBackup).Path.TrimEnd('\')
-        if ($srcResolved -ine $tgtResolved) {
-            Write-Log "Moving backups from $srcBackup -> $targetBackup"
-            foreach ($pattern in @("*.zip", "*.reg")) {
-                Get-ChildItem -Path $srcBackup -Filter $pattern -File -ErrorAction SilentlyContinue | ForEach-Object {
-                    $dest = Join-Path $targetBackup $_.Name
-                    Move-Item -Path $_.FullName -Destination $dest -Force
-                    Write-Log "  Moved: $($_.Name)" "OK"
-                }
+    if ($sourceZips.Count -gt 0) {
+        Write-Log "Moving $($sourceZips.Count) zip file(s) from $bepozBackup to $oolioBackup..."
+        foreach ($z in $sourceZips) {
+            $dest = Join-Path $oolioBackup $z.Name
+            # If the destination already has a same-named zip, preserve both with a suffix.
+            if (Test-Path $dest) {
+                $stamp = Get-Date -Format "yyyyMMdd_HHmmss"
+                $dest = Join-Path $oolioBackup ("{0}_{1}{2}" -f [System.IO.Path]::GetFileNameWithoutExtension($z.Name), $stamp, $z.Extension)
             }
-        } else {
-            Write-Log "BackupPath already resolves to $targetBackup. No move needed."
+            $sizeMB = [math]::Round($z.Length / 1MB, 2)
+            Move-Item -Path $z.FullName -Destination $dest -Force
+            Write-Log "  Moved: $($z.Name) ($sizeMB MB) -> $dest" "OK"
         }
+    } else {
+        Write-Log "No .zip files found under $bepozBackup."
     }
 
-    # Safety guard: verify a data backup zip is in the target folder before deleting anything.
-    $existingBackups = @(Get-ChildItem -Path $targetBackup -Filter "Bepoz_Data_*.zip" -File -ErrorAction SilentlyContinue)
-    if ($existingBackups.Count -eq 0) {
-        Write-Log "No Bepoz_Data_*.zip backup found in $targetBackup. ABORTING to protect data." "ERROR"
-        Write-Log "Run the zip-data step first, then retry." "WARN"
+    # Verify all moved files are present in the destination.
+    $destZips = @(Get-ChildItem -Path $oolioBackup -Filter "*.zip" -File -ErrorAction SilentlyContinue)
+    Write-Log "Destination now contains $($destZips.Count) zip file(s):"
+    foreach ($d in $destZips) {
+        $sz = [math]::Round($d.Length / 1MB, 2)
+        Write-Log "  $($d.Name) - $sz MB"
+    }
+
+    # Safety guard: confirm at least one Bepoz_Data_*.zip is present before deletion.
+    $dataBackups = @($destZips | Where-Object { $_.Name -like "Bepoz_Data_*.zip" })
+    if ($dataBackups.Count -eq 0) {
+        Write-Log "No Bepoz_Data_*.zip found in $oolioBackup. ABORTING to protect data." "ERROR"
+        Write-Log "Run the zip-data step first if applicable, then retry." "WARN"
         return
     }
-    Write-Log "Confirmed $($existingBackups.Count) data backup zip(s) in $targetBackup." "OK"
+    Write-Log "Confirmed $($dataBackups.Count) data backup zip(s) in $oolioBackup." "OK"
 
-    # Delete every child of C:\Bepoz except the Backup folder.
-    Write-Log "Removing all $bepozRoot contents except Backup..."
-    $removed = 0
-    Get-ChildItem -Path $bepozRoot -Force | Where-Object { $_.Name -ne "Backup" } | ForEach-Object {
-        Write-Log "  Removing: $($_.Name)"
-        Remove-Item -Path $_.FullName -Recurse -Force -ErrorAction SilentlyContinue
-        $removed++
+    # Now remove C:\Bepoz\ entirely.
+    if (Test-Path $bepozRoot) {
+        Write-Log "Removing $bepozRoot and all its contents..."
+        Remove-Item -Path $bepozRoot -Recurse -Force -ErrorAction SilentlyContinue
+        Start-Sleep -Milliseconds 300
+        if (Test-Path $bepozRoot) {
+            Write-Log "$bepozRoot still exists after removal attempt. Some files may be locked - close any tools using them and retry." "ERROR"
+        } else {
+            Write-Log "$bepozRoot removed successfully." "OK"
+        }
+    } else {
+        Write-Log "$bepozRoot does not exist. Nothing to remove." "WARN"
     }
 
-    Write-Log "Removed $removed item(s) from $bepozRoot." "OK"
-    Write-Log "Final state: $targetBackup retained, all other Bepoz files removed." "OK"
+    Write-Log "Final state: $oolioBackup retained with $($destZips.Count) zip(s); $bepozRoot removed." "OK"
 }

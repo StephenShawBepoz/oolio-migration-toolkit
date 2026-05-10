@@ -5,14 +5,14 @@ function Get-StepFunctionName {
 
     $map = @{
         "bepoz" = @{
-            "read-registry"   = "Invoke-BepozReadRegistry"
-            "stop-sql"        = "Invoke-BepozStopSQL"
-            "zip-data"        = "Invoke-BepozZipData"
-            "kill-processes"  = "Invoke-BepozKillProcesses"
-            "clear-startup"   = "Invoke-BepozClearStartup"
-            "check-run-key"   = "Invoke-BepozCheckRunKey"
-            "delete-registry" = "Invoke-BepozDeleteRegistry"
-            "uninstall"       = "Invoke-BepozUninstall"
+            "read-registry"        = "Invoke-BepozReadRegistry"
+            "terminate-processes"  = "Invoke-BepozTerminateProcesses"
+            "stop-sql"             = "Invoke-BepozStopSQL"
+            "zip-data"             = "Invoke-BepozZipData"
+            "clear-startup"        = "Invoke-BepozClearStartup"
+            "check-run-key"        = "Invoke-BepozCheckRunKey"
+            "delete-registry"      = "Invoke-BepozDeleteRegistry"
+            "consolidate-backups"  = "Invoke-BepozConsolidateBackups"
         }
         "windows" = @{
             "verify-autologon" = "Invoke-WindowsVerifyAutologon"
@@ -31,7 +31,6 @@ function Get-StepFunctionName {
             "create-folders"     = "Invoke-OolioCreateFolders"
             "install-pos-chrome" = "Invoke-OolioInstallPOSChrome"
             "install-cds-chrome" = "Invoke-OolioInstallCDSChrome"
-            "install-kds-chrome" = "Invoke-OolioInstallKDSChrome"
             "set-startup"        = "Invoke-OolioSetStartup"
             "final-restart"      = "Invoke-OolioFinalRestart"
         }

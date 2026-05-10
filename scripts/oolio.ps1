@@ -66,60 +66,28 @@ function Invoke-OolioInstallCDSChrome {
     Write-Log "If primary display is not 1920px wide, update the --window-position X value in the shortcut manually."
 }
 
-function Invoke-OolioInstallKDSChrome {
-    Write-Section "Creating Oolio KDS Chrome kiosk shortcut"
-
-    $chromePath = Get-ChromePath
-    if (-not $chromePath) {
-        Write-Log "Chrome not found. Install Chrome in the dependencies module first." "ERROR"
-        return
-    }
-
-    $shortcutPath = "C:\Users\Public\Desktop\Oolio KDS.lnk"
-    $shell    = New-Object -ComObject WScript.Shell
-    $shortcut = $shell.CreateShortcut($shortcutPath)
-    $shortcut.TargetPath  = $chromePath
-    $shortcut.Arguments   = "--kiosk https://kds.oolio.io --no-first-run --disable-infobars"
-    $shortcut.WindowStyle = 3
-    $shortcut.Save()
-
-    Write-Log "Shortcut created: $shortcutPath" "OK"
-    Write-Log "Launches kds.oolio.io fullscreen."
-}
-
 function Invoke-OolioSetStartup {
-    param([string]$terminalType)
-
     Write-Section "Configuring startup via shell:startup"
-
-    if ($terminalType -eq "KDS") {
-        $shortcutName = "Oolio KDS.lnk"
-    } elseif ($terminalType -eq "POS-CDS") {
-        $shortcutName = "Oolio POS.lnk"  # CDS shortcut is added separately below
-    } else {
-        $shortcutName = "Oolio POS.lnk"
-    }
-
-    $sourceShortcut = Join-Path "C:\Users\Public\Desktop" $shortcutName
-    if (-not (Test-Path $sourceShortcut)) {
-        Write-Log "Desktop shortcut not found at: $sourceShortcut" "ERROR"
-        Write-Log "Create the application shortcut first, then run this step." "WARN"
-        return
-    }
 
     $startupFolder = "$env:APPDATA\Microsoft\Windows\Start Menu\Programs\Startup"
     if (-not (Test-Path $startupFolder)) {
         New-Item -ItemType Directory -Path $startupFolder -Force | Out-Null
     }
 
-    Copy-Item -Path $sourceShortcut -Destination (Join-Path $startupFolder $shortcutName) -Force
-    Write-Log "Copied to shell:startup: $startupFolder\$shortcutName" "OK"
+    $copied = 0
+    foreach ($name in @("Oolio POS.lnk", "Oolio CDS.lnk")) {
+        $src = Join-Path "C:\Users\Public\Desktop" $name
+        if (Test-Path $src) {
+            Copy-Item -Path $src -Destination (Join-Path $startupFolder $name) -Force
+            Write-Log "Copied to shell:startup: $startupFolder\$name" "OK"
+            $copied++
+        }
+    }
 
-    # If a CDS shortcut also exists, copy that too so both launch on login.
-    $cdsShortcut = "C:\Users\Public\Desktop\Oolio CDS.lnk"
-    if (Test-Path $cdsShortcut) {
-        Copy-Item -Path $cdsShortcut -Destination (Join-Path $startupFolder "Oolio CDS.lnk") -Force
-        Write-Log "Copied CDS shortcut to shell:startup: $startupFolder\Oolio CDS.lnk" "OK"
+    if ($copied -eq 0) {
+        Write-Log "No Oolio desktop shortcuts found to copy." "ERROR"
+        Write-Log "Run the install-pos-chrome / install-cds-chrome steps first." "WARN"
+        return
     }
 
     Write-Log "Oolio will launch automatically when the autologon user signs in."
