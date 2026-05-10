@@ -322,12 +322,21 @@ async function runMigrateLoop() {
             if (status === 'error') {
                 state.migrate.errorState = true;
                 render();
+                let result;
                 try {
-                    await waitForMigrateUser();
+                    result = await waitForMigrateUser();
                 } catch (e) {
                     return; // aborted
                 }
                 state.migrate.errorState = false;
+                // Honour Skip from the error popup. Without this, skipMigrateStep
+                // resolved the wait but the step status stayed 'error', so the loop
+                // immediately re-ran and re-errored - the Skip button looked broken.
+                // retryMigrateStep flips status to 'pending' itself before resolving,
+                // so its path still works the same way.
+                if (result && result.skipped) {
+                    setStepStatus(next.moduleId, next.stepId, 'skipped');
+                }
                 continue;
             }
 
