@@ -91,19 +91,48 @@ function Invoke-BepozZipData {
 }
 
 function Invoke-BepozKillProcesses {
-    Write-Section "Terminating Bepoz processes"
+    Write-Section "Terminating processes running from C:\Bepoz"
 
-    $procs = Get-Process | Where-Object { $_.Name -ilike "*bepoz*" -or $_.Name -ilike "*backoffice*" }
+    $bepozRoot = "C:\Bepoz"
+    if (-not (Test-Path $bepozRoot)) {
+        Write-Log "Bepoz root folder not found: $bepozRoot. Nothing to terminate."
+        return
+    }
 
-    if (-not $procs -or $procs.Count -eq 0) {
-        Write-Log "No running Bepoz processes found."
-    } else {
-        foreach ($p in $procs) {
-            Write-Log "Stopping process: $($p.Name) (PID $($p.Id))"
-            Stop-Process -Id $p.Id -Force -ErrorAction SilentlyContinue
-            Write-Log "Stopped: $($p.Name)" "OK"
+    $rootPrefix = (Resolve-Path $bepozRoot).Path.TrimEnd('\') + '\'
+    Write-Log "Scanning for processes whose executable lives under $rootPrefix"
+
+    $hits = @()
+    foreach ($proc in Get-Process) {
+        $path = $null
+        try { $path = $proc.Path } catch { $path = $null }
+        if ($path -and $path.StartsWith($rootPrefix, [System.StringComparison]::OrdinalIgnoreCase)) {
+            $hits += [pscustomobject]@{ Proc = $proc; Path = $path }
         }
     }
+
+    if ($hits.Count -eq 0) {
+        Write-Log "No running processes found under $bepozRoot."
+        Write-Log "Process cleanup complete." "OK"
+        return
+    }
+
+    Write-Log "Found $($hits.Count) matching process(es):"
+    foreach ($h in $hits) {
+        Write-Log "  PID $($h.Proc.Id) - $($h.Proc.Name) - $($h.Path)"
+    }
+
+    foreach ($h in $hits) {
+        Write-Log "Stopping: $($h.Proc.Name) (PID $($h.Proc.Id))"
+        Stop-Process -Id $h.Proc.Id -Force -ErrorAction SilentlyContinue
+        Start-Sleep -Milliseconds 200
+        if (Get-Process -Id $h.Proc.Id -ErrorAction SilentlyContinue) {
+            Write-Log "Failed to stop: $($h.Proc.Name) (PID $($h.Proc.Id))" "ERROR"
+        } else {
+            Write-Log "Stopped: $($h.Proc.Name)" "OK"
+        }
+    }
+
     Write-Log "Process cleanup complete." "OK"
 }
 

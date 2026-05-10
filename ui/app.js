@@ -12,7 +12,7 @@ const MODULES = [
             { id: 'read-registry',   title: 'Read Bepoz registry',   risk: 'safe',   note: 'Reads SQL_Server, DataPath, BackupPath from HKCU\\Software\\Backoffice. No changes made.' },
             { id: 'stop-sql',        title: 'Stop SQL Server',       risk: 'warn',   note: 'Stops and disables the local MSSQL$<instance> service if present. Skips silently if SQL is on a venue server.' },
             { id: 'zip-data',        title: 'Zip Bepoz data',        risk: 'safe',   note: 'Compresses the DataPath folder into the BackupPath. Verify the zip exists before continuing.' },
-            { id: 'kill-processes',  title: 'Terminate Bepoz processes', risk: 'safe', note: 'Force-stops any running Bepoz/Backoffice processes.' },
+            { id: 'kill-processes',  title: 'Terminate processes from C:\\Bepoz', risk: 'safe', note: 'Walks every running process and force-stops any whose executable lives under C:\\Bepoz (matches by path, not by process name).' },
             { id: 'clear-startup',   title: 'Clear shell:startup',   risk: 'warn',   note: 'Removes everything from the user shell:startup folder. POS terminal only.' },
             { id: 'check-run-key',   title: 'Export & clean HKCU Run key', risk: 'warn', note: 'Exports the entire HKCU Run key to the backup folder (HKCU_Run_<timestamp>.reg), then removes known Bepoz Run keys. Restore the export with reg import if needed.' },
             { id: 'delete-registry', title: 'Delete Bepoz registry', risk: 'danger', note: 'Removes HKCU\\Software\\Backoffice. Make sure the data backup zip exists first.' },
