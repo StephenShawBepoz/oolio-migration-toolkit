@@ -4,12 +4,23 @@ A locally-hosted web toolkit that guides a technician through migrating a Window
 
 ## Usage
 
-1. Copy this folder to the Windows POS terminal.
-2. Drop `wallpaper.jpg` into `assets\` and any Epson `.cer` files into `certs\`.
-3. Right-click `Launch.ps1` and choose **Run as Administrator**.
-4. The browser opens to `http://localhost:8080` with the technician UI.
+### Option A — Remote (ScreenConnect / elevated PowerShell)
 
-Works on Windows 10 and Windows 11. No internet connection required after copy. No installation required.
+Paste this one-liner into an elevated ScreenConnect command (or any admin PowerShell on the terminal). It pulls the latest release, extracts it to `C:\OolioMigration\`, and launches:
+
+```powershell
+iwr https://raw.githubusercontent.com/StephenShawBepoz/oolio-migration-toolkit/main/bootstrap.ps1 -UseBasicParsing | iex
+```
+
+### Option B — Manual (USB stick or pre-staged copy)
+
+1. Download the latest release zip from the [Releases page](https://github.com/StephenShawBepoz/oolio-migration-toolkit/releases/latest).
+2. Extract `OolioMigration\` to the terminal (e.g. `C:\OolioMigration\`).
+3. Drop `wallpaper.jpg` into `assets\` and any Epson `.cer` files into `certs\`.
+4. Right-click `Launch.ps1` and choose **Run as Administrator**.
+5. The browser opens to `http://localhost:8080` with the technician UI.
+
+Works on Windows 10 and Windows 11. Internet is only required at bootstrap time (Option A). The toolkit itself runs fully offline once unpacked.
 
 ## Folder structure
 
