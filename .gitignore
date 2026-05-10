@@ -1,5 +1,4 @@
 progress.json
-assets/wallpaper.jpg
 certs/*.cer
 *.log
 .DS_Store
