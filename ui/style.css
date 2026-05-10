@@ -184,6 +184,65 @@ input[type="text"]:focus { outline: 2px solid var(--oolio-purple); outline-offse
   line-height: 1.5;
 }
 
+/* "Or" fallback card - manual / all-modules option */
+.terminal-type-fallback-section { margin-top: 24px; }
+.terminal-type-fallback-divider {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  color: var(--text-muted);
+  font-size: 12px;
+  text-transform: uppercase;
+  letter-spacing: 0.1em;
+  margin-bottom: 14px;
+}
+.terminal-type-fallback-divider::before,
+.terminal-type-fallback-divider::after {
+  content: '';
+  flex: 1;
+  height: 1px;
+  background: var(--border);
+}
+.terminal-type-card-fallback {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  width: 100%;
+  padding: 18px 20px;
+  text-align: left;
+  background: var(--bg);
+  border: 1px dashed var(--border);
+  border-radius: 12px;
+  cursor: pointer;
+  font-family: inherit;
+  transition: border-color 0.15s, background 0.15s, transform 0.05s;
+}
+.terminal-type-card-fallback:hover {
+  border-color: var(--oolio-purple);
+  background: var(--surface);
+}
+.terminal-type-card-fallback:active { transform: scale(0.99); }
+.terminal-type-card-fallback.selected {
+  border-style: solid;
+  border-color: var(--oolio-purple);
+  background: var(--oolio-purple-light);
+}
+.terminal-type-fallback-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+.terminal-type-fallback-label {
+  font-size: 15px;
+  font-weight: 700;
+  color: var(--text-primary);
+}
+.terminal-type-fallback-arrow {
+  color: var(--oolio-purple);
+  font-size: 18px;
+  font-weight: 700;
+}
+
 /* Type indicator pill on home */
 .terminal-type-pill {
   display: flex;

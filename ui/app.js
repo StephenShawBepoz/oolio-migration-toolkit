@@ -8,9 +8,10 @@
 // T = Till (no SQL / data backup; still has the till cleanup steps)
 
 const TERMINAL_TYPES = [
-    { code: 'S',  label: 'Server',       desc: 'On-premises venue server. Runs SQL Server and holds Bepoz data. No POS interface.' },
-    { code: 'ST', label: 'Server Till',  desc: 'Acts as both venue server and POS terminal. Runs SQL Server, holds Bepoz data, and runs the till.' },
-    { code: 'T',  label: 'Till',         desc: 'POS terminal only. No SQL Server. No Bepoz data stored locally. Connects to the server for data.' }
+    { code: 'S',   label: 'Server',              desc: 'On-premises venue server. Runs SQL Server and holds Bepoz data. No POS interface.' },
+    { code: 'ST',  label: 'Server Till',         desc: 'Acts as both venue server and POS terminal. Runs SQL Server, holds Bepoz data, and runs the till.' },
+    { code: 'T',   label: 'Till',                desc: 'POS terminal only. No SQL Server. No Bepoz data stored locally. Connects to the server for data.' },
+    { code: 'ALL', label: 'All modules (manual)', desc: 'Skip the type filter. Show every module and step in the original 1 / 2 / 3 / 4 order so you can cherry-pick. Use for unusual configurations or one-off troubleshooting.' }
 ];
 
 const MODULES = [
@@ -147,6 +148,7 @@ function getTerminalType() { return getMeta().terminalType || ''; }
 function isModuleVisible(moduleDef) {
     const tt = getTerminalType();
     if (!tt) return false;
+    if (tt === 'ALL') return true;
     if (!moduleDef.showInTypes) return true;
     return moduleDef.showInTypes.includes(tt);
 }
@@ -159,7 +161,7 @@ function getVisibleSteps(moduleDef) {
     const meta = getMeta();
     const tt = meta.terminalType || '';
     return moduleDef.steps.filter(step => {
-        if (step.showInTypes && !step.showInTypes.includes(tt)) return false;
+        if (tt !== 'ALL' && step.showInTypes && !step.showInTypes.includes(tt)) return false;
         if (step.showWhen && !step.showWhen(meta)) return false;
         return true;
     });
@@ -504,13 +506,25 @@ function renderOverallProgress() {
 
 function renderSelectType(forChange = false) {
     const current = getTerminalType();
-    const options = TERMINAL_TYPES.map(t => `
+    const primaryTypes = TERMINAL_TYPES.filter(t => t.code !== 'ALL');
+    const fallbackType = TERMINAL_TYPES.find(t => t.code === 'ALL');
+
+    const primaryHtml = primaryTypes.map(t => `
       <button class="terminal-type-card${current === t.code ? ' selected' : ''}" data-type="${t.code}">
         <div class="terminal-type-code">${t.code}</div>
         <div class="terminal-type-label">${escapeHtml(t.label)}</div>
         <div class="terminal-type-desc">${escapeHtml(t.desc)}</div>
       </button>
     `).join('');
+
+    const fallbackHtml = fallbackType ? `
+      <button class="terminal-type-card-fallback${current === 'ALL' ? ' selected' : ''}" data-type="ALL">
+        <div class="terminal-type-fallback-row">
+          <div class="terminal-type-fallback-label">${escapeHtml(fallbackType.label)}</div>
+          <div class="terminal-type-fallback-arrow">→</div>
+        </div>
+        <div class="terminal-type-desc">${escapeHtml(fallbackType.desc)}</div>
+      </button>` : '';
 
     return `
       <div class="app-header">
@@ -523,7 +537,11 @@ function renderSelectType(forChange = false) {
       <div class="select-type">
         <h2 class="select-type-heading">${forChange ? 'Change terminal type' : 'Select this terminal type'}</h2>
         <p class="select-type-sub">This drives which modules and steps the toolkit shows. You can change it later from the home page.</p>
-        <div class="terminal-type-grid">${options}</div>
+        <div class="terminal-type-grid">${primaryHtml}</div>
+        <div class="terminal-type-fallback-section">
+          <div class="terminal-type-fallback-divider"><span>or</span></div>
+          ${fallbackHtml}
+        </div>
         ${forChange && current ? '<div class="select-type-warning">Changing the terminal type may make some completed steps no longer relevant. Their status is preserved in progress.json but they will not show in the new module list.</div>' : ''}
       </div>
     `;
@@ -965,12 +983,12 @@ function render() {
 }
 
 function attachSelectTypeHandlers() {
-    document.querySelectorAll('.terminal-type-card').forEach(card => {
+    document.querySelectorAll('[data-type]').forEach(card => {
         card.addEventListener('click', () => {
             const code = card.dataset.type;
             const previous = getTerminalType();
             if (previous && previous !== code) {
-                if (!confirm(`Change terminal type from ${previous} to ${code}?\n\nCompleted steps that don't apply to ${code} will no longer appear in the module list. Their status is preserved.`)) return;
+                if (!confirm(`Change selection from ${previous} to ${code}?\n\nCompleted steps that don't apply may no longer appear in the module list. Their status is preserved.`)) return;
             }
             state.progress.meta = state.progress.meta || {};
             state.progress.meta.terminalType = code;
