@@ -37,7 +37,12 @@ function Invoke-DownloadWithHeartbeat {
 
     $job = Start-Job -ScriptBlock {
         param($u, $o)
-        [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
+        # Tls13 may not be defined on older .NET; fall back to Tls12-only if so.
+        try {
+            [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12 -bor [Net.SecurityProtocolType]::Tls13
+        } catch {
+            [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
+        }
         Invoke-WebRequest -Uri $u -OutFile $o -UseBasicParsing -ErrorAction Stop
     } -ArgumentList $Url, $OutFile
 
@@ -73,6 +78,46 @@ function Invoke-DownloadWithHeartbeat {
     $finalSize = [math]::Round((Get-Item $OutFile).Length / 1MB, 1)
     $totalDl   = [int]((Get-Date) - $start).TotalSeconds
     Write-Log "Downloaded: $finalSize MB to $OutFile in ${totalDl}s" "OK"
+    return $true
+}
+
+# Verify that a downloaded file has a valid Authenticode signature, optionally
+# matching a wildcard pattern on the signer's subject (e.g. "*Google LLC*").
+# Returns $true if the signature is Valid (and matches the pattern when given),
+# $false otherwise. Logs the outcome via Write-Log.
+function Test-InstallerSignature {
+    param(
+        [string]$Path,
+        [string]$ExpectedSubjectLike
+    )
+
+    if (-not (Test-Path $Path)) {
+        Write-Log "Cannot verify signature: file not found at $Path" "ERROR"
+        return $false
+    }
+
+    try {
+        $sig = Get-AuthenticodeSignature -FilePath $Path -ErrorAction Stop
+    } catch {
+        Write-Log "Failed to read Authenticode signature: $($_.Exception.Message)" "ERROR"
+        return $false
+    }
+
+    if ($sig.Status -ne 'Valid') {
+        Write-Log "Authenticode signature status is '$($sig.Status)' (expected Valid)." "ERROR"
+        if ($sig.StatusMessage) { Write-Log "Detail: $($sig.StatusMessage)" "ERROR" }
+        return $false
+    }
+
+    $subject = ""
+    if ($sig.SignerCertificate) { $subject = $sig.SignerCertificate.Subject }
+    Write-Log "Signature: Valid - signed by $subject" "OK"
+
+    if ($ExpectedSubjectLike -and ($subject -notlike $ExpectedSubjectLike)) {
+        Write-Log "Signer subject does not match expected pattern '$ExpectedSubjectLike'. Refusing to run installer." "ERROR"
+        return $false
+    }
+
     return $true
 }
 
