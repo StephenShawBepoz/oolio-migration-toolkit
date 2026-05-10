@@ -1,0 +1,6 @@
+progress.json
+assets/wallpaper.jpg
+certs/*.cer
+*.log
+.DS_Store
+Thumbs.db
