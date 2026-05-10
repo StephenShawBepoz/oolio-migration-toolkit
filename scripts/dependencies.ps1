@@ -10,16 +10,46 @@ function Invoke-DepsCheckChrome {
         $ver = (Get-Item $chromePath).VersionInfo.FileVersion
         Write-Log "Chrome found at: $chromePath" "OK"
         Write-Log "Version: $ver"
-    } elseif (Test-Path $chromePathx86) {
+        return
+    }
+    if (Test-Path $chromePathx86) {
         $ver = (Get-Item $chromePathx86).VersionInfo.FileVersion
         Write-Log "Chrome found at: $chromePathx86" "OK"
         Write-Log "Version: $ver"
-    } else {
-        Write-Log "Chrome not found on this terminal." "WARN"
-        Write-Log "Download and install Chrome before running Chrome-mode deployments."
-        Start-Process "https://www.google.com/chrome/"
-        Write-Log "Chrome download page opened in browser."
+        return
     }
+
+    Write-Log "Chrome not found. Downloading enterprise installer..." "WARN"
+
+    $msiUrl  = "https://dl.google.com/dl/chrome/install/googlechromestandaloneenterprise64.msi"
+    $msiPath = Join-Path $env:TEMP "googlechromestandaloneenterprise64.msi"
+
+    try {
+        [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
+        Write-Log "Source: $msiUrl"
+        Invoke-WebRequest -Uri $msiUrl -OutFile $msiPath -UseBasicParsing -ErrorAction Stop
+        $size = [math]::Round((Get-Item $msiPath).Length / 1MB, 1)
+        Write-Log "Downloaded: $size MB to $msiPath" "OK"
+    } catch {
+        Write-Log "Failed to download Chrome MSI: $($_.Exception.Message)" "ERROR"
+        Write-Log "The terminal needs internet at this point. Re-run when connectivity is available." "WARN"
+        return
+    }
+
+    Write-Log "Installing silently (msiexec /i /qn /norestart)..."
+    $proc = Start-Process -FilePath "msiexec.exe" -ArgumentList @("/i", "`"$msiPath`"", "/qn", "/norestart") -Wait -PassThru -NoNewWindow
+
+    if ($proc.ExitCode -eq 0) {
+        Write-Log "Chrome installed successfully." "OK"
+        if (Test-Path $chromePath) {
+            $ver = (Get-Item $chromePath).VersionInfo.FileVersion
+            Write-Log "Verified: $chromePath version $ver" "OK"
+        }
+    } else {
+        Write-Log "msiexec exited with code $($proc.ExitCode)." "ERROR"
+    }
+
+    Remove-Item -Path $msiPath -Force -ErrorAction SilentlyContinue
 }
 
 function Invoke-DepsCheckWebView2 {
@@ -40,44 +70,3 @@ function Invoke-DepsCheckWebView2 {
     }
 }
 
-function Invoke-DepsInstallCerts {
-    param([string]$toolkitRoot)
-
-    Write-Section "Installing Epson TLS certificates"
-
-    $certsFolder = Join-Path $toolkitRoot "certs"
-
-    if (-not (Test-Path $certsFolder)) {
-        Write-Log "Certs folder not found at: $certsFolder" "ERROR"
-        return
-    }
-
-    $certs = @(Get-ChildItem -Path $certsFolder -Filter "*.cer")
-
-    if ($certs.Count -eq 0) {
-        Write-Log "No .cer files found in certs folder." "WARN"
-        Write-Log "Generate certificates via the Epson printer web interface and place them in the certs\ folder."
-        return
-    }
-
-    Write-Log "Found $($certs.Count) certificate(s) to install."
-
-    foreach ($cert in $certs) {
-        Write-Log "Installing: $($cert.Name)"
-        $result = certutil -addstore "Root" $cert.FullName 2>&1
-        if ($LASTEXITCODE -eq 0) {
-            Write-Log "Installed: $($cert.Name)" "OK"
-        } else {
-            Write-Log "Failed to install: $($cert.Name) - $result" "ERROR"
-        }
-    }
-
-    Write-Log "Verifying installed certificates..."
-    $verify = certutil -store Root 2>&1 | Select-String -Pattern "epson" -CaseSensitive:$false
-    if ($verify) {
-        Write-Log "Epson certificate(s) confirmed in Root store." "OK"
-        $verify | ForEach-Object { Write-Log "  $_" }
-    } else {
-        Write-Log "No Epson certificates found in Root store after installation. Check output above." "WARN"
-    }
-}

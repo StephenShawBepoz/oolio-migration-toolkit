@@ -338,11 +338,59 @@ input[type="text"]:focus { outline: 2px solid var(--oolio-purple); outline-offse
   margin-bottom: 8px;
   font-size: 13px;
 }
-.radio-row { display: flex; gap: 16px; flex-wrap: wrap; }
-.radio-row label {
+.radio-row { display: flex; gap: 12px; flex-wrap: wrap; }
+
+/* Larger button-style radio cards inside the config form */
+.config-form .radio-row label {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 140px;
+  padding: 18px 24px;
+  font-size: 15px;
+  font-weight: 600;
+  border: 2px solid var(--border);
+  border-radius: 10px;
+  background: var(--surface);
+  cursor: pointer;
+  transition: border-color 0.15s, background 0.15s, color 0.15s, transform 0.05s;
+  user-select: none;
+}
+.config-form .radio-row label:hover { border-color: var(--oolio-purple); }
+.config-form .radio-row label:active { transform: scale(0.98); }
+.config-form .radio-row label:has(input:checked) {
+  border-color: var(--oolio-purple);
+  background: var(--oolio-purple-light);
+  color: var(--oolio-purple);
+}
+.config-form .radio-row label:has(input:disabled) {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+.config-form .radio-row input { position: absolute; opacity: 0; pointer-events: none; }
+
+/* Default smaller radio rows for any non-config-form usage */
+.radio-row label:not(:has(input)) {
   display: flex;
   align-items: center;
   gap: 6px;
   font-size: 13px;
   cursor: pointer;
 }
+
+/* Multi-input field stack used by verify-autologon etc. */
+.step-inputs {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  margin-bottom: 12px;
+  max-width: 420px;
+}
+.step-input-field { display: flex; flex-direction: column; gap: 4px; }
+.step-input-label {
+  font-size: 12px;
+  color: var(--text-secondary);
+  font-weight: 600;
+}
+.step-input-row { display: flex; align-items: center; gap: 8px; }
+.step-input-row input { max-width: 100%; }

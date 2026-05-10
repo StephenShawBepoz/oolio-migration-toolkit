@@ -25,11 +25,20 @@ const MODULES = [
         icon: '2',
         description: 'Verify autologon, firewall, network, then rename and clean the device.',
         steps: [
-            { id: 'verify-autologon', title: 'Verify autologon',  risk: 'safe', note: 'Reads Winlogon registry to confirm the terminal will boot directly to its user.' },
+            { id: 'verify-autologon', title: 'Verify / enable autologon', risk: 'warn',
+              requiresInputs: [
+                { name: 'username', label: 'Username', placeholder: 'e.g. POSUser' },
+                { name: 'password', label: 'Password', placeholder: '', type: 'password' },
+                { name: 'domain',   label: 'Domain (optional)', placeholder: 'leave blank for local machine' }
+              ],
+              note: 'Reads the Winlogon registry to confirm autologon. If autologon is off and you fill the form, the toolkit writes the autologon registry values. Effective after the final restart. The password is stored in plaintext at HKLM\\Software\\Microsoft\\Windows NT\\CurrentVersion\\Winlogon - this is the standard Windows AutoAdminLogon mechanism.'
+            },
             { id: 'enable-firewall',  title: 'Enable Windows Firewall', risk: 'warn', note: 'Enables firewall for Domain, Private, and Public profiles.' },
             { id: 'check-ip',         title: 'Check IP configuration', risk: 'safe', note: 'Shows current IP and DHCP status for active adapters.' },
             { id: 'switch-dhcp',      title: 'Switch to DHCP',     risk: 'warn', note: 'Switches static-IP adapters to DHCP. Skips silently if already DHCP.' },
-            { id: 'rename-device',    title: 'Rename device',      risk: 'warn', requiresInput: true, inputLabel: 'Suffix (after "Oolio-")', inputPlaceholder: 'POS1', note: 'Renames the device to Oolio-<suffix>. Effective after the final restart.' },
+            { id: 'rename-device',    title: 'Rename device',      risk: 'warn',
+              requiresInputs: [{ name: 'value', label: 'Suffix (after "Oolio-")', placeholder: 'POS1', prefix: 'Oolio-' }],
+              note: 'Renames the device to Oolio-<suffix>. Effective after the final restart.' },
             { id: 'clean-desktop',    title: 'Clean desktop',      risk: 'warn', note: 'Removes everything from user and public desktop. POS terminal only.' },
             { id: 'set-wallpaper',    title: 'Apply Oolio wallpaper', risk: 'safe', note: 'Copies assets/wallpaper.jpg to C:\\Oolio\\Assets and applies it. Drop wallpaper.jpg into the toolkit assets\\ folder before running.' }
         ]
@@ -38,9 +47,9 @@ const MODULES = [
         id: 'dependencies',
         name: 'Oolio Dependencies',
         icon: '3',
-        description: 'Verify Chrome and WebView2, install printer certs and utility links.',
+        description: 'Verify or install Chrome and WebView2, plus printer utility links.',
         steps: [
-            { id: 'check-chrome',      title: 'Check Google Chrome', risk: 'safe', note: 'Reports Chrome install path and version. Opens download page if missing.' },
+            { id: 'check-chrome',      title: 'Check / install Google Chrome', risk: 'safe', note: 'Reports Chrome install path and version. If Chrome is missing, downloads the Google Enterprise MSI and installs it silently (msiexec /qn). Requires internet at this step.' },
             { id: 'check-webview2',    title: 'Check Edge WebView2', risk: 'safe', note: 'Required for Windows native Oolio POS and CDS apps. Opens download page if missing.' },
             { id: 'printer-utilities', title: 'Printer utilities',   risk: 'safe', linksOnly: true,
               links: [
@@ -52,8 +61,7 @@ const MODULES = [
                 { label: 'Element / Gravity Utility (pending Oolio confirmation)', href: '#' }
               ],
               note: 'Open each utility download in your browser. No PowerShell execution. Mark done once installed/handled.'
-            },
-            { id: 'install-certs',     title: 'Install Epson printer certs', risk: 'warn', note: 'Installs every .cer file in the certs\\ folder into the Root store. Drop .cer files into the toolkit certs\\ folder first. Epson only.' }
+            }
         ]
     },
     {
@@ -67,7 +75,7 @@ const MODULES = [
             { id: 'install-pos-chrome', title: 'Create Oolio POS shortcut (Chrome kiosk)', risk: 'safe', note: 'Public-desktop shortcut launching pos.oolio.io fullscreen.', showWhen: m => m.terminalType === 'POS' && m.deploymentMode === 'chrome' },
             { id: 'install-cds-chrome', title: 'Create Oolio CDS shortcut (Chrome kiosk)', risk: 'safe', note: 'Public-desktop shortcut launching cds.oolio.io on the second display.', showWhen: m => m.terminalType === 'POS' && m.deploymentMode === 'chrome' && m.hasCDS === true },
             { id: 'install-kds-chrome', title: 'Create Oolio KDS shortcut (Chrome kiosk)', risk: 'safe', note: 'Public-desktop shortcut launching kds.oolio.io fullscreen.', showWhen: m => m.terminalType === 'KDS' },
-            { id: 'set-startup',        title: 'Configure startup',          risk: 'warn', note: 'Adds an HKCU Run key entry so Oolio launches on boot.' },
+            { id: 'set-startup',        title: 'Configure startup',          risk: 'warn', note: 'Copies the Oolio desktop shortcut(s) into shell:startup so the kiosk launches when the autologon user signs in. Also tidies up legacy HKCU Run entries from older toolkit builds.' },
             { id: 'final-restart',      title: 'Schedule final restart',     risk: 'warn', note: 'Schedules a 30-second restart. Run "shutdown /a" to cancel.' }
         ]
     }
@@ -159,15 +167,24 @@ function setStepStatus(moduleId, stepId, status) {
 
 // ---------- SSE step runner ----------
 
-function runStep(moduleId, stepId, inputValue) {
+function runStep(moduleId, stepId, extras) {
     const key = moduleId + '.' + stepId;
     state.runningStep = key;
     state.outputLog[key] = [];
     setStepStatus(moduleId, stepId, 'running');
     render();
 
+    // Backwards compat: if a plain string is passed, treat it as the legacy "value" param.
+    let params = {};
+    if (typeof extras === 'string') params.value = extras;
+    else if (extras && typeof extras === 'object') params = extras;
+
     let url = `/run?module=${encodeURIComponent(moduleId)}&step=${encodeURIComponent(stepId)}`;
-    if (inputValue) url += `&value=${encodeURIComponent(inputValue)}`;
+    Object.keys(params).forEach(k => {
+        if (params[k] !== undefined && params[k] !== null && params[k] !== '') {
+            url += `&${encodeURIComponent(k)}=${encodeURIComponent(params[k])}`;
+        }
+    });
 
     const es = new EventSource(url);
 
@@ -348,22 +365,39 @@ function renderStep(moduleDef, step, index) {
         if (step.configStep) {
             body = `<div class="step-body"><div class="step-body-inner">${renderConfigStep()}</div></div>`;
         } else {
-            const inputVal = state.inputValues[key] || '';
             const isDanger = step.risk === 'danger';
             const confirmed = state.confirmTicked[key] === true;
-            const hasInput = step.requiresInput;
-            const inputOk = !hasInput || (inputVal && inputVal.trim().length > 0);
-            const runDisabled = isRunning || (isDanger && !confirmed) || !inputOk;
+            const inputs = step.requiresInputs || [];
+            // Inputs are optional by default. Only rename-device requires its single value.
+            const requiredFieldsFilled = inputs.every(inp => {
+                if (step.id === 'rename-device' && inp.name === 'value') {
+                    const v = state.inputValues[key + '.' + inp.name] || '';
+                    return v.trim().length > 0;
+                }
+                return true;
+            });
+            const runDisabled = isRunning || (isDanger && !confirmed) || !requiredFieldsFilled;
 
             const linksHtml = step.links ? `
               <ul class="links-list">
                 ${step.links.map(l => `<li><a href="${escapeHtml(l.href)}" target="_blank" rel="noopener">${escapeHtml(l.label)}</a></li>`).join('')}
               </ul>` : '';
 
-            const inputHtml = hasInput ? `
-              <div class="step-input-row">
-                ${step.id === 'rename-device' ? '<span class="step-input-prefix">Oolio-</span>' : ''}
-                <input type="text" data-step-input="${key}" value="${escapeHtml(inputVal)}" placeholder="${escapeHtml(step.inputPlaceholder || '')}" />
+            const inputHtml = inputs.length > 0 ? `
+              <div class="step-inputs">
+                ${inputs.map(inp => {
+                    const fieldKey = key + '.' + inp.name;
+                    const val = state.inputValues[fieldKey] || '';
+                    const inputType = inp.type === 'password' ? 'password' : 'text';
+                    return `
+                      <label class="step-input-field">
+                        <span class="step-input-label">${escapeHtml(inp.label)}</span>
+                        <span class="step-input-row">
+                          ${inp.prefix ? `<span class="step-input-prefix">${escapeHtml(inp.prefix)}</span>` : ''}
+                          <input type="${inputType}" data-step-input="${fieldKey}" value="${escapeHtml(val)}" placeholder="${escapeHtml(inp.placeholder || '')}" autocomplete="off" />
+                        </span>
+                      </label>`;
+                }).join('')}
               </div>` : '';
 
             const dangerWarning = isDanger ? `
@@ -507,10 +541,17 @@ function attachModuleHandlers() {
             const key = btn.dataset.key;
 
             if (action === 'run') {
-                let value = null;
-                if (stepId === 'rename-device') value = state.inputValues[key] || '';
-                else if (stepId === 'set-startup') value = (getMeta().terminalType || '');
-                runStep(moduleId, stepId, value);
+                const extra = {};
+                if (stepId === 'rename-device') {
+                    extra.value = state.inputValues[key + '.value'] || '';
+                } else if (stepId === 'set-startup') {
+                    extra.value = (getMeta().terminalType || '');
+                } else if (stepId === 'verify-autologon') {
+                    extra.username = state.inputValues[key + '.username'] || '';
+                    extra.password = state.inputValues[key + '.password'] || '';
+                    extra.domain   = state.inputValues[key + '.domain']   || '';
+                }
+                runStep(moduleId, stepId, extra);
             } else if (action === 'mark-done') {
                 setStepStatus(moduleId, stepId, 'complete');
                 render();

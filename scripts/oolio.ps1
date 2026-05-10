@@ -90,37 +90,48 @@ function Invoke-OolioInstallKDSChrome {
 function Invoke-OolioSetStartup {
     param([string]$terminalType)
 
-    Write-Section "Configuring startup"
-
-    $runPath = "HKCU:\Software\Microsoft\Windows\CurrentVersion\Run"
-
-    Remove-ItemProperty -Path $runPath -Name "OolioPOS" -ErrorAction SilentlyContinue
-    Remove-ItemProperty -Path $runPath -Name "OolioKDS" -ErrorAction SilentlyContinue
+    Write-Section "Configuring startup via shell:startup"
 
     if ($terminalType -eq "KDS") {
-        $shortcutPath = "C:\Users\Public\Desktop\Oolio KDS.lnk"
-        $entryName = "OolioKDS"
+        $shortcutName = "Oolio KDS.lnk"
+    } elseif ($terminalType -eq "POS-CDS") {
+        $shortcutName = "Oolio POS.lnk"  # CDS shortcut is added separately below
     } else {
-        $shortcutPath = "C:\Users\Public\Desktop\Oolio POS.lnk"
-        $entryName = "OolioPOS"
+        $shortcutName = "Oolio POS.lnk"
     }
 
-    if (-not (Test-Path $shortcutPath)) {
-        Write-Log "Shortcut not found at: $shortcutPath" "ERROR"
+    $sourceShortcut = Join-Path "C:\Users\Public\Desktop" $shortcutName
+    if (-not (Test-Path $sourceShortcut)) {
+        Write-Log "Desktop shortcut not found at: $sourceShortcut" "ERROR"
         Write-Log "Create the application shortcut first, then run this step." "WARN"
         return
     }
 
-    Set-ItemProperty -Path $runPath -Name $entryName -Value $shortcutPath
-    Write-Log "Added $entryName to HKCU Run key." "OK"
-    Write-Log "Oolio will launch automatically when the terminal boots and the user logs in."
+    $startupFolder = "$env:APPDATA\Microsoft\Windows\Start Menu\Programs\Startup"
+    if (-not (Test-Path $startupFolder)) {
+        New-Item -ItemType Directory -Path $startupFolder -Force | Out-Null
+    }
 
-    Write-Log "Verifying Run key..."
-    $verify = (Get-ItemProperty -Path $runPath -ErrorAction SilentlyContinue).$entryName
-    if ($verify) {
-        Write-Log "Confirmed: $entryName = $verify" "OK"
-    } else {
-        Write-Log "Could not verify Run key entry." "ERROR"
+    Copy-Item -Path $sourceShortcut -Destination (Join-Path $startupFolder $shortcutName) -Force
+    Write-Log "Copied to shell:startup: $startupFolder\$shortcutName" "OK"
+
+    # If a CDS shortcut also exists, copy that too so both launch on login.
+    $cdsShortcut = "C:\Users\Public\Desktop\Oolio CDS.lnk"
+    if (Test-Path $cdsShortcut) {
+        Copy-Item -Path $cdsShortcut -Destination (Join-Path $startupFolder "Oolio CDS.lnk") -Force
+        Write-Log "Copied CDS shortcut to shell:startup: $startupFolder\Oolio CDS.lnk" "OK"
+    }
+
+    Write-Log "Oolio will launch automatically when the autologon user signs in."
+
+    # Tidy up any legacy HKCU Run entries from previous toolkit versions.
+    $runPath = "HKCU:\Software\Microsoft\Windows\CurrentVersion\Run"
+    foreach ($name in @("OolioPOS", "OolioKDS")) {
+        $existing = (Get-ItemProperty -Path $runPath -ErrorAction SilentlyContinue).$name
+        if ($existing) {
+            Remove-ItemProperty -Path $runPath -Name $name -Force -ErrorAction SilentlyContinue
+            Write-Log "Removed legacy HKCU Run entry: $name" "OK"
+        }
     }
 }
 

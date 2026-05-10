@@ -41,7 +41,6 @@ function Get-DefaultProgress {
             "check-chrome"      = "pending"
             "check-webview2"    = "pending"
             "printer-utilities" = "pending"
-            "install-certs"     = "pending"
         }
         oolio = @{
             "terminal-type"       = "pending"
@@ -131,7 +130,7 @@ function Send-SSE {
 }
 
 function Invoke-StepStreaming {
-    param($Response, [string]$ModuleId, [string]$StepId, [string]$Value)
+    param($Response, [string]$ModuleId, [string]$StepId, [hashtable]$Params)
 
     $Response.StatusCode = 200
     $Response.ContentType = "text/event-stream"
@@ -160,18 +159,24 @@ function Invoke-StepStreaming {
             return
         }
 
+        function Quote-PSLiteral($s) { if ($null -eq $s) { return "''" }; return "'" + ($s -replace "'", "''") + "'" }
+
+        $value = $Params["value"]
+
         # Build a child-PowerShell command that dot-sources shared + module, then calls the function.
         # Output is line-buffered to stdout so we can stream it back as SSE.
         $argSegment = ""
         if ($StepId -eq "rename-device") {
-            $safe = ($Value -replace "'", "''")
-            $argSegment = " -terminalName '$safe'"
-        } elseif ($StepId -eq "set-wallpaper" -or $StepId -eq "install-certs") {
-            $safe = ($ToolkitRoot -replace "'", "''")
-            $argSegment = " -toolkitRoot '$safe'"
+            $argSegment = " -terminalName " + (Quote-PSLiteral $value)
+        } elseif ($StepId -eq "set-wallpaper") {
+            $argSegment = " -toolkitRoot " + (Quote-PSLiteral $ToolkitRoot)
         } elseif ($StepId -eq "set-startup") {
-            $safe = ($Value -replace "'", "''")
-            $argSegment = " -terminalType '$safe'"
+            $argSegment = " -terminalType " + (Quote-PSLiteral $value)
+        } elseif ($StepId -eq "verify-autologon") {
+            $u = $Params["username"]; $p = $Params["password"]; $d = $Params["domain"]
+            $argSegment = " -username " + (Quote-PSLiteral $u) + " -password " + (Quote-PSLiteral $p) + " -domain " + (Quote-PSLiteral $d)
+        } elseif ($StepId -eq "uninstall") {
+            # No argument needed - reads BackupPath from registry directly.
         }
 
         $command = ". '$sharedScript'; . '$moduleScriptPath'; $functionName$argSegment"
@@ -271,11 +276,16 @@ try {
                 '^GET /run$' {
                     $moduleId = Get-QueryValue -Query $request.Url.Query -Key "module"
                     $stepId   = Get-QueryValue -Query $request.Url.Query -Key "step"
-                    $value    = Get-QueryValue -Query $request.Url.Query -Key "value"
                     if (-not $moduleId -or -not $stepId) {
                         Write-TextResponse -Response $response -Body "Missing module or step parameter" -Status 400
                     } else {
-                        Invoke-StepStreaming -Response $response -ModuleId $moduleId -StepId $stepId -Value $value
+                        $params = @{
+                            value    = Get-QueryValue -Query $request.Url.Query -Key "value"
+                            username = Get-QueryValue -Query $request.Url.Query -Key "username"
+                            password = Get-QueryValue -Query $request.Url.Query -Key "password"
+                            domain   = Get-QueryValue -Query $request.Url.Query -Key "domain"
+                        }
+                        Invoke-StepStreaming -Response $response -ModuleId $moduleId -StepId $stepId -Params $params
                     }
                     break
                 }

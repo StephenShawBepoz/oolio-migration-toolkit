@@ -1,6 +1,12 @@
 # windows.ps1 - Module 2: Windows Settings step functions
 
 function Invoke-WindowsVerifyAutologon {
+    param(
+        [string]$username = "",
+        [string]$password = "",
+        [string]$domain   = ""
+    )
+
     Write-Section "Verifying autologon configuration"
 
     $winlogonPath = "HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Winlogon"
@@ -8,16 +14,48 @@ function Invoke-WindowsVerifyAutologon {
     $defaultUser   = (Get-ItemProperty -Path $winlogonPath -Name DefaultUserName   -ErrorAction SilentlyContinue).DefaultUserName
     $defaultDomain = (Get-ItemProperty -Path $winlogonPath -Name DefaultDomainName -ErrorAction SilentlyContinue).DefaultDomainName
 
-    Write-Log "AutoAdminLogon: $autoAdmin"
-    Write-Log "DefaultUserName: $defaultUser"
-    Write-Log "DefaultDomainName: $defaultDomain"
+    Write-Log "Current AutoAdminLogon:  $autoAdmin"
+    Write-Log "Current DefaultUserName: $defaultUser"
+    Write-Log "Current DefaultDomainName: $defaultDomain"
 
-    if ($autoAdmin -eq "1") {
+    $hasInputs = ($username -and $username.Trim()) -or ($password -and $password.Trim()) -or ($domain -and $domain.Trim())
+
+    if ($autoAdmin -eq "1" -and -not $hasInputs) {
         Write-Log "Autologon is active. Terminal will boot directly to user: $defaultUser" "OK"
-    } else {
-        Write-Log "Autologon is NOT active. Terminal will show login screen on reboot." "ERROR"
-        Write-Log "Autologon must be restored before the final restart. Set AutoAdminLogon=1 in the Winlogon registry key." "WARN"
+        return
     }
+
+    if ($autoAdmin -ne "1") {
+        Write-Log "Autologon is NOT active. Terminal will show the login screen on reboot." "WARN"
+    }
+
+    if (-not $hasInputs) {
+        Write-Log "Fill in Username and Password (and optionally Domain) in the form, then run again to enable autologon." "WARN"
+        return
+    }
+
+    if (-not $username -or -not $username.Trim()) {
+        Write-Log "Username is required to enable autologon." "ERROR"
+        return
+    }
+    if (-not $password) {
+        Write-Log "Password is required to enable autologon." "ERROR"
+        return
+    }
+
+    Write-Log "Enabling autologon for user: $username"
+    Set-ItemProperty -Path $winlogonPath -Name AutoAdminLogon  -Value "1"     -Force
+    Set-ItemProperty -Path $winlogonPath -Name DefaultUserName -Value $username -Force
+    Set-ItemProperty -Path $winlogonPath -Name DefaultPassword -Value $password -Force
+    if ($domain -and $domain.Trim()) {
+        Set-ItemProperty -Path $winlogonPath -Name DefaultDomainName -Value $domain.Trim() -Force
+    } else {
+        Set-ItemProperty -Path $winlogonPath -Name DefaultDomainName -Value $env:COMPUTERNAME -Force
+    }
+
+    Write-Log "Autologon registry values written." "OK"
+    Write-Log "Note: DefaultPassword is stored in plaintext at $winlogonPath - this is the standard AutoAdminLogon mechanism." "WARN"
+    Write-Log "Effective after the final restart at the end of the toolkit."
 }
 
 function Invoke-WindowsEnableFirewall {

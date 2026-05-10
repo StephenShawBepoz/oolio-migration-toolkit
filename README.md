@@ -16,11 +16,11 @@ iwr https://raw.githubusercontent.com/StephenShawBepoz/oolio-migration-toolkit/m
 
 1. Download the latest release zip from the [Releases page](https://github.com/StephenShawBepoz/oolio-migration-toolkit/releases/latest).
 2. Extract `OolioMigration\` to the terminal (e.g. `C:\OolioMigration\`).
-3. Drop `wallpaper.jpg` into `assets\` and any Epson `.cer` files into `certs\`.
+3. (Optional) Replace `assets\wallpaper.jpg` with a different image if needed.
 4. Right-click `Launch.ps1` and choose **Run as Administrator**.
 5. The browser opens to `http://localhost:8080` with the technician UI.
 
-Works on Windows 10 and Windows 11. Internet is only required at bootstrap time (Option A). The toolkit itself runs fully offline once unpacked.
+Works on Windows 10 and Windows 11. Chrome is auto-installed at run-time if missing (needs internet at that step). The rest of the toolkit runs fully offline once unpacked.
 
 ## Folder structure
 
@@ -31,8 +31,7 @@ OolioMigration\
   server\               HTTP listener + router
   ui\                   single-page web app
   scripts\              module + shared PowerShell logic
-  assets\               wallpaper.jpg drops here
-  certs\                Epson .cer files drop here
+  assets\               wallpaper.jpg ships here
 ```
 
 See `claude.md` for the full specification.
