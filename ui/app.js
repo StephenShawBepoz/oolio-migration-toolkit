@@ -435,15 +435,9 @@ function runStep(moduleId, stepId, extras) {
                 resolve(!hasError);
                 return;
             }
-            if (e.data.startsWith('__ERROR__')) {
-                state.outputLog[key].push(e.data);
-                render();
-                return;
-            }
-            state.outputLog[key].push(e.data);
-            render();
-            const el = document.getElementById('output-' + moduleId + '-' + stepId);
-            if (el) el.scrollTop = el.scrollHeight;
+            // Both regular output and __ERROR__ lines append to the live log without
+            // a full re-render, so input focus and scroll positions are preserved.
+            appendOutputLine(moduleId, stepId, e.data);
         };
         es.onerror = function () {
             es.close();
@@ -781,6 +775,29 @@ function renderMigrate() {
 
       ${centerHtml}
     `;
+}
+
+// Append a single output line to the live log without re-rendering the whole UI.
+// Re-rendering on every SSE line was eating keystrokes in the rename-device input
+// and resetting scroll position. This appends directly to the existing DOM node;
+// state.outputLog still accumulates so a later full render reproduces the same view.
+function appendOutputLine(moduleId, stepId, line) {
+    const key = moduleId + '.' + stepId;
+    state.outputLog[key] = state.outputLog[key] || [];
+    state.outputLog[key].push(line);
+
+    const el = document.getElementById('output-' + moduleId + '-' + stepId);
+    if (!el) return;
+
+    let cls = '';
+    if (line.includes('[OK]')) cls = 'ok';
+    else if (line.includes('[WARN]')) cls = 'warn';
+    else if (line.includes('[ERROR]') || line.startsWith('__ERROR__')) cls = 'error';
+
+    const prefix = el.childNodes.length > 0 ? '\n' : '';
+    el.insertAdjacentHTML('beforeend',
+        prefix + `<span class="output-line ${cls}">${escapeHtml(line)}</span>`);
+    el.scrollTop = el.scrollHeight;
 }
 
 function renderOutputLog(moduleId, stepId) {
