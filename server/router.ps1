@@ -17,6 +17,8 @@ function Get-StepFunctionName {
         "windows" = @{
             "verify-autologon" = "Invoke-WindowsVerifyAutologon"
             "enable-firewall"  = "Invoke-WindowsEnableFirewall"
+            "active-hours"     = "Invoke-WindowsActiveHours"
+            "harden-pos"       = "Invoke-WindowsHardenPOS"
             "check-ip"         = "Invoke-WindowsCheckIP"
             "switch-dhcp"      = "Invoke-WindowsSwitchDHCP"
             "rename-device"    = "Invoke-WindowsRenameDevice"

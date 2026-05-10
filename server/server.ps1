@@ -35,6 +35,8 @@ function Get-DefaultProgress {
         windows = @{
             "verify-autologon" = "pending"
             "enable-firewall"  = "pending"
+            "active-hours"     = "pending"
+            "harden-pos"       = "pending"
             "check-ip"         = "pending"
             "rename-device"    = "pending"
             "clean-desktop"    = "pending"
@@ -243,6 +245,8 @@ function Invoke-StepStreaming {
         } elseif ($StepId -eq "verify-autologon") {
             $u = $Params["username"]; $p = $Params["password"]; $d = $Params["domain"]
             $argSegment = " -username " + (Quote-PSLiteral $u) + " -password " + (Quote-PSLiteral $p) + " -domain " + (Quote-PSLiteral $d)
+        } elseif ($StepId -eq "active-hours") {
+            $argSegment = " -updateHour " + (Quote-PSLiteral $value)
         }
 
         $command = ". '$sharedScript'; . '$moduleScriptPath'; $functionName$argSegment"
@@ -263,11 +267,15 @@ function Invoke-StepStreaming {
         Write-SessionLog ("--- {0} :: {1}/{2} ---" -f (Get-Date -Format 'HH:mm:ss'), $ModuleId, $StepId)
 
         # Stream stdout line by line, teeing each line to the session log.
+        # __PROGRESS__: lines are UI-only ephemera (one JSON line per second per
+        # long-running step) - skip them in the log file to keep it readable.
         while (-not $proc.StandardOutput.EndOfStream) {
             $line = $proc.StandardOutput.ReadLine()
             if ($null -ne $line) {
                 Send-SSE -Response $Response -Data $line
-                Write-SessionLog $line
+                if (-not $line.StartsWith('__PROGRESS__:')) {
+                    Write-SessionLog $line
+                }
             }
         }
 

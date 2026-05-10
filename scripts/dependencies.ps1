@@ -25,7 +25,7 @@ function Invoke-DepsCheckChrome {
     $msiPath = Join-Path $env:TEMP "googlechromestandaloneenterprise64.msi"
 
     Write-Log "Source: $msiUrl"
-    if (-not (Invoke-DownloadWithHeartbeat -Url $msiUrl -OutFile $msiPath)) {
+    if (-not (Invoke-DownloadWithHeartbeat -Url $msiUrl -OutFile $msiPath -ProgressLabel "Downloading Google Chrome")) {
         Write-Log "The terminal needs internet at this point. Re-run when connectivity is available." "WARN"
         return
     }
@@ -38,7 +38,7 @@ function Invoke-DepsCheckChrome {
 
     Write-Log "Installing silently (msiexec /i /qn /norestart)..."
     $proc = Start-Process -FilePath "msiexec.exe" -ArgumentList @("/i", "`"$msiPath`"", "/qn", "/norestart") -PassThru -NoNewWindow
-    Wait-ProcessWithHeartbeat -Process $proc -Label "msiexec"
+    Wait-ProcessWithHeartbeat -Process $proc -Label "Installing Chrome (msiexec)"
 
     if ($proc.ExitCode -eq 0) {
         Write-Log "Chrome installed successfully." "OK"
@@ -78,7 +78,7 @@ function Invoke-DepsInstallTeamViewer {
     $installer = Join-Path $env:TEMP "TeamViewer_Setup_x64.exe"
 
     Write-Log "Source: $url"
-    if (-not (Invoke-DownloadWithHeartbeat -Url $url -OutFile $installer)) {
+    if (-not (Invoke-DownloadWithHeartbeat -Url $url -OutFile $installer -ProgressLabel "Downloading TeamViewer")) {
         Write-Log "The terminal needs internet at this point. Re-run when connectivity is available." "WARN"
         return
     }
@@ -91,7 +91,7 @@ function Invoke-DepsInstallTeamViewer {
 
     Write-Log "Installing silently (/S)..."
     $proc = Start-Process -FilePath $installer -ArgumentList "/S" -PassThru -NoNewWindow
-    Wait-ProcessWithHeartbeat -Process $proc -Label "TeamViewer installer"
+    Wait-ProcessWithHeartbeat -Process $proc -Label "Installing TeamViewer"
 
     if ($proc.ExitCode -eq 0) {
         Write-Log "TeamViewer installer exited cleanly." "OK"
@@ -132,7 +132,7 @@ function Invoke-DepsCheckWebView2 {
     $installer = Join-Path $env:TEMP "MicrosoftEdgeWebview2Setup.exe"
 
     Write-Log "Source: $url"
-    if (-not (Invoke-DownloadWithHeartbeat -Url $url -OutFile $installer)) {
+    if (-not (Invoke-DownloadWithHeartbeat -Url $url -OutFile $installer -ProgressLabel "Downloading Edge WebView2")) {
         Write-Log "The terminal needs internet at this point. Re-run when connectivity is available." "WARN"
         return
     }
@@ -145,7 +145,7 @@ function Invoke-DepsCheckWebView2 {
 
     Write-Log "Installing silently (/silent /install)..."
     $proc = Start-Process -FilePath $installer -ArgumentList @("/silent", "/install") -PassThru -NoNewWindow
-    Wait-ProcessWithHeartbeat -Process $proc -Label "WebView2 installer"
+    Wait-ProcessWithHeartbeat -Process $proc -Label "Installing WebView2"
 
     if ($proc.ExitCode -eq 0) {
         $installed = Get-ItemProperty -Path $regPath -ErrorAction SilentlyContinue

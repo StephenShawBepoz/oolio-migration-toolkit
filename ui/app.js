@@ -49,6 +49,11 @@ const MODULES = [
               note: 'Reads the Winlogon registry to confirm autologon. If autologon is off and you fill the form, the toolkit writes the autologon registry values. Password lands in plaintext at HKLM\\Software\\Microsoft\\Windows NT\\CurrentVersion\\Winlogon - standard AutoAdminLogon mechanism.'
             },
             { id: 'enable-firewall',  title: 'Enable Windows Firewall', risk: 'warn', showInTypes: ['S','ST','T'], note: 'Enables firewall for Domain, Private, and Public profiles.' },
+            { id: 'active-hours',     title: 'Configure Windows Update active hours', risk: 'warn', showInTypes: ['S','ST','T'],
+              requiresInputs: [{ name: 'value', label: 'Update window hour (24h, 0-23)', placeholder: '3' }],
+              note: 'Locks Windows Update active hours via Group Policy. Updates only install in a 6-hour window centred on the supplied hour. Recommended: 3 (3am). Also clears NoAutoRebootWithLoggedOnUsers so the autologon user does not block reboots.' },
+            { id: 'harden-pos',       title: 'Disable Windows nags / OneDrive / Spotlight', risk: 'warn', showInTypes: ['ST','T'],
+              note: 'Turns off OneDrive sync prompts, Windows Spotlight, Cortana, news/widgets, Edge first-run, Microsoft Account sign-in nag, and other consumer-friendly prompts that get in the way on a POS. Idempotent - safe to re-run.' },
             { id: 'check-ip',         title: 'Check IP configuration', risk: 'safe', showInTypes: ['S','ST','T'], note: 'Shows current IP and DHCP status for every active adapter. If a static IP is detected, the migrate flow surfaces a "Switch to DHCP" prompt as an inline action.' },
             { id: 'rename-device',    title: 'Rename device', risk: 'warn', showInTypes: ['S','ST','T'], optional: true,
               requiresInputs: [{ name: 'value', label: 'Suffix (after "Oolio-")', placeholder: 'POS1', prefix: 'Oolio-' }],
@@ -108,6 +113,9 @@ let state = {
     outputLog: {},
     inputValues: {},
     confirmTicked: {},
+    // Latest progress event per step. Updated 1x/sec while a download or install
+    // is running; cleared via { done: true } when the operation finishes.
+    progressBars: {},
     migrate: {
         active: false,
         aborted: false,
@@ -254,6 +262,10 @@ function getStepExtras(stepId) {
             password: state.inputValues[k + '.password'] || '',
             domain:   state.inputValues[k + '.domain']   || ''
         };
+    }
+    if (stepId === 'active-hours') {
+        // Default to 3 (3am) when the tech leaves the field blank.
+        return { value: state.inputValues['windows.active-hours.value'] || '3' };
     }
     return {};
 }
@@ -437,11 +449,21 @@ function runStep(moduleId, stepId, extras) {
             if (e.data === '__DONE__') {
                 es.close();
                 state.runningStep = null;
+                state.progressBars[key] = null;  // hide any leftover bar
                 const log = state.outputLog[key] || [];
                 const hasError = log.some(line => line.includes('[ERROR]') || line.startsWith('__ERROR__'));
                 setStepStatus(moduleId, stepId, hasError ? 'error' : 'complete');
                 render();
                 resolve(!hasError);
+                return;
+            }
+            if (e.data.startsWith('__PROGRESS__:')) {
+                try {
+                    const payload = JSON.parse(e.data.substring('__PROGRESS__:'.length).trim());
+                    updateProgressBar(moduleId, stepId, payload);
+                } catch (err) {
+                    // Malformed event - drop silently
+                }
                 return;
             }
             // Both regular output and __ERROR__ lines append to the live log without
@@ -654,6 +676,7 @@ function renderPauseCard(action) {
           <div class="migrate-pause">
             <div class="migrate-pause-title">${escapeHtml(step.title)}</div>
             <div class="migrate-pause-note">${escapeHtml(step.note || '')}</div>
+            ${renderProgressBar(action.moduleId, action.stepId)}
             ${renderOutputLog(action.moduleId, action.stepId)}
             <div class="step-actions">
               <button class="btn-primary" data-migrate-action="continue">${escapeHtml(runLabel)}</button>
@@ -740,6 +763,7 @@ function renderMigrate() {
           <div class="migrate-pause">
             <div class="migrate-pause-title">Step reported an error: ${escapeHtml(action.stepDef.title)}</div>
             <div class="migrate-pause-note">Review the output below. Retry, skip, or stop the migration.</div>
+            ${renderProgressBar(action.moduleId, action.stepId)}
             ${renderOutputLog(action.moduleId, action.stepId)}
             <div class="step-actions">
               <button class="btn-primary" data-migrate-action="retry">Retry step</button>
@@ -753,6 +777,7 @@ function renderMigrate() {
           <div class="migrate-now">
             <div class="migrate-now-label">${isRunning ? 'Running' : 'Preparing'} - ${escapeHtml(action.moduleDef.name)}</div>
             <div class="migrate-now-title">${escapeHtml(action.stepDef.title)}</div>
+            ${renderProgressBar(action.moduleId, action.stepId)}
             ${renderOutputLog(action.moduleId, action.stepId)}
             <div class="step-actions">
               <button class="btn-ghost" data-migrate-action="abort">Stop migration</button>
@@ -784,6 +809,61 @@ function renderMigrate() {
 
       ${centerHtml}
     `;
+}
+
+// Render the progress bar HTML for a step. Returns empty string if no progress
+// is active. Called from renderStep / renderMigrate; kept in sync with live
+// updates by updateProgressBar.
+function renderProgressBar(moduleId, stepId) {
+    const key = moduleId + '.' + stepId;
+    const p = state.progressBars[key];
+    if (!p || p.done) return '';
+    return `
+        <div id="progress-${moduleId}-${stepId}" class="progress-bar-container">
+            <div class="progress-bar-track"><div class="progress-bar-fill"></div></div>
+            <div class="progress-bar-label"></div>
+        </div>`;
+}
+
+// Parse a __PROGRESS__ payload and update the live progress bar without a full
+// re-render (so input focus and scroll are preserved). Falls back to triggering
+// a render if the bar container is not yet in the DOM.
+function updateProgressBar(moduleId, stepId, payload) {
+    const key = moduleId + '.' + stepId;
+    state.progressBars[key] = payload;
+
+    const container = document.getElementById('progress-' + moduleId + '-' + stepId);
+    if (!container) {
+        // First progress event for this step - need a render to materialise the
+        // container. Subsequent events update it directly.
+        if (state.runningStep === key) render();
+        return;
+    }
+
+    if (payload.done) {
+        container.style.display = 'none';
+        return;
+    }
+    container.style.display = '';
+
+    const fill  = container.querySelector('.progress-bar-fill');
+    const label = container.querySelector('.progress-bar-label');
+    if (!fill || !label) return;
+
+    if (payload.total > 0) {
+        const pct = Math.min(100, Math.floor((payload.current / payload.total) * 100));
+        const cur = (payload.current / 1024 / 1024).toFixed(1);
+        const tot = (payload.total / 1024 / 1024).toFixed(1);
+        fill.classList.remove('indeterminate');
+        fill.style.width = pct + '%';
+        label.textContent = `${payload.label} · ${cur} / ${tot} MB · ${pct}% · ${payload.elapsed}s`;
+    } else {
+        fill.classList.add('indeterminate');
+        fill.style.width = '100%';
+        const mins = Math.floor(payload.elapsed / 60);
+        const secs = (payload.elapsed % 60).toString().padStart(2, '0');
+        label.textContent = `${payload.label} · ${mins}:${secs} elapsed`;
+    }
 }
 
 // Append a single output line to the live log without re-rendering the whole UI.
@@ -921,6 +1001,7 @@ function renderStep(moduleDef, step, index) {
                   ${dangerWarning}
                   ${linksHtml}
                   ${inputHtml}
+                  ${renderProgressBar(moduleDef.id, step.id)}
                   ${renderOutputLog(moduleDef.id, step.id)}
                   <div class="step-actions">
                     ${showRun ? `<button class="btn-primary" data-action="run" data-key="${key}" ${runDisabled ? 'disabled' : ''}>${isRunning ? 'Running…' : 'Run'}</button>` : ''}

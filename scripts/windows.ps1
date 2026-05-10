@@ -209,3 +209,146 @@ public class Wallpaper {
     [Wallpaper]::SystemParametersInfo(20, 0, $destPath, 3) | Out-Null
     Write-Log "Wallpaper applied." "OK"
 }
+
+function Invoke-WindowsActiveHours {
+    param([string]$updateHour)
+
+    Write-Section "Configuring Windows Update active hours"
+
+    if (-not $updateHour -or $updateHour.Trim() -eq "") {
+        Write-Log "No update hour provided. Defaulting to 3 (3am)." "WARN"
+        $updateHour = "3"
+    }
+
+    $hour = 0
+    if (-not [int]::TryParse($updateHour.Trim(), [ref]$hour)) {
+        Write-Log "Update hour '$updateHour' is not a valid number. Cannot configure." "ERROR"
+        return
+    }
+    if ($hour -lt 0 -or $hour -gt 23) {
+        Write-Log "Update hour must be 0-23 (got $hour)." "ERROR"
+        return
+    }
+
+    # Windows enforces a max 18-hour active window, so the inactive (update) window
+    # must be at least 6 hours. We centre a 6-hour inactive window on the user's
+    # chosen update hour.
+    $activeStart = ($hour + 3) % 24
+    $activeEnd   = (($hour - 3) + 24) % 24
+    $inactiveStart = $activeEnd
+    $inactiveEnd   = $activeStart
+
+    Write-Log "Update window centred at ${hour}:00 -> updates may install ${inactiveStart}:00 - ${inactiveEnd}:00 (6 hours)."
+    Write-Log "Active hours (no reboots): ${activeStart}:00 - ${activeEnd}:00 (18 hours)."
+
+    # --- Layer 1: Group Policy (locks the values; greys out Settings UI) ---
+    $polPath = "HKLM:\SOFTWARE\Policies\Microsoft\Windows\WindowsUpdate"
+    if (-not (Test-Path $polPath)) {
+        New-Item -Path $polPath -Force | Out-Null
+        Write-Log "Created policy key: $polPath"
+    }
+    Set-ItemProperty -Path $polPath -Name "SetActiveHours"   -Value 1            -Type DWord -Force
+    Set-ItemProperty -Path $polPath -Name "ActiveHoursStart" -Value $activeStart -Type DWord -Force
+    Set-ItemProperty -Path $polPath -Name "ActiveHoursEnd"   -Value $activeEnd   -Type DWord -Force
+    Write-Log "Policy active hours locked: SetActiveHours=1, Start=$activeStart, End=$activeEnd" "OK"
+
+    # --- Clear NoAutoRebootWithLoggedOnUsers so the autologon user does not block reboots ---
+    $auPath = "HKLM:\SOFTWARE\Policies\Microsoft\Windows\WindowsUpdate\AU"
+    if (-not (Test-Path $auPath)) { New-Item -Path $auPath -Force | Out-Null }
+    Set-ItemProperty -Path $auPath -Name "NoAutoRebootWithLoggedOnUsers" -Value 0 -Type DWord -Force
+    Write-Log "NoAutoRebootWithLoggedOnUsers = 0 (autologon user will not block reboot)" "OK"
+
+    # --- Layer 2: User-settings path (fallback for Home edition where GPO is unenforced) ---
+    $uxPath = "HKLM:\SOFTWARE\Microsoft\WindowsUpdate\UX\Settings"
+    if (-not (Test-Path $uxPath)) { New-Item -Path $uxPath -Force | Out-Null }
+    Set-ItemProperty -Path $uxPath -Name "ActiveHoursStart"      -Value $activeStart -Type DWord -Force
+    Set-ItemProperty -Path $uxPath -Name "ActiveHoursEnd"        -Value $activeEnd   -Type DWord -Force
+    Set-ItemProperty -Path $uxPath -Name "IsActiveHoursEnabled"  -Value 1            -Type DWord -Force
+    Set-ItemProperty -Path $uxPath -Name "SmartActiveHoursState" -Value 0            -Type DWord -Force
+    Write-Log "User-settings active hours mirrored: $activeStart - $activeEnd (smart auto-detect disabled)" "OK"
+
+    Write-Log "Configuration complete. Verify in Settings > Windows Update > Update Hours - it should show 'Some settings managed by your organisation'." "OK"
+}
+
+function Invoke-WindowsHardenPOS {
+    Write-Section "Hardening Windows for POS use"
+    Write-Log "Disabling consumer-friendly nags (OneDrive sync prompts, Spotlight, Cortana, news/widgets, Edge first-run, etc.)"
+
+    # Helper to ensure a registry path exists before writing
+    function Ensure-Path($p) {
+        if (-not (Test-Path $p)) { New-Item -Path $p -Force | Out-Null }
+    }
+
+    # --- OneDrive sync prompts ---
+    Ensure-Path "HKLM:\SOFTWARE\Policies\Microsoft\Windows\OneDrive"
+    Set-ItemProperty -Path "HKLM:\SOFTWARE\Policies\Microsoft\Windows\OneDrive" -Name "DisableFileSyncNGSC" -Value 1 -Type DWord -Force
+    Write-Log "OneDrive sync prompts disabled (DisableFileSyncNGSC=1)" "OK"
+
+    # --- "Let's finish setting up your device" / SCOOBE ---
+    Ensure-Path "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\UserProfileEngagement"
+    Set-ItemProperty -Path "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\UserProfileEngagement" -Name "ScoobeSystemSettingEnabled" -Value 0 -Type DWord -Force
+    Ensure-Path "HKCU:\SOFTWARE\Microsoft\Windows\CurrentVersion\UserProfileEngagement"
+    Set-ItemProperty -Path "HKCU:\SOFTWARE\Microsoft\Windows\CurrentVersion\UserProfileEngagement" -Name "ScoobeSystemSettingEnabled" -Value 0 -Type DWord -Force
+    Write-Log "SCOOBE 'finish setting up your device' prompts disabled" "OK"
+
+    # --- Windows Spotlight + Start menu suggestions + lock screen content ---
+    $cdm = "HKCU:\SOFTWARE\Microsoft\Windows\CurrentVersion\ContentDeliveryManager"
+    Ensure-Path $cdm
+    $cdmKeys = @(
+        "SubscribedContent-310093Enabled",
+        "SubscribedContent-338387Enabled",
+        "SubscribedContent-338388Enabled",
+        "SubscribedContent-338389Enabled",
+        "SubscribedContent-338393Enabled",
+        "SubscribedContent-353694Enabled",
+        "SubscribedContent-353696Enabled",
+        "SubscribedContent-353698Enabled",
+        "SystemPaneSuggestionsEnabled",
+        "SilentInstalledAppsEnabled",
+        "OEMPreInstalledAppsEnabled",
+        "PreInstalledAppsEnabled",
+        "PreInstalledAppsEverEnabled",
+        "SoftLandingEnabled",
+        "RotatingLockScreenEnabled",
+        "RotatingLockScreenOverlayEnabled"
+    )
+    foreach ($name in $cdmKeys) {
+        Set-ItemProperty -Path $cdm -Name $name -Value 0 -Type DWord -Force
+    }
+    Write-Log "Windows Spotlight + Start menu suggestions + lock screen rotating content disabled ($($cdmKeys.Count) keys)" "OK"
+
+    # --- Cortana / search-box web search ---
+    $sp = "HKLM:\SOFTWARE\Policies\Microsoft\Windows\Windows Search"
+    Ensure-Path $sp
+    Set-ItemProperty -Path $sp -Name "AllowCortana"          -Value 0 -Type DWord -Force
+    Set-ItemProperty -Path $sp -Name "DisableWebSearch"      -Value 1 -Type DWord -Force
+    Set-ItemProperty -Path $sp -Name "ConnectedSearchUseWeb" -Value 0 -Type DWord -Force
+    Write-Log "Cortana and search-box web results disabled" "OK"
+
+    # --- News and interests / Widgets on taskbar ---
+    Ensure-Path "HKLM:\SOFTWARE\Policies\Microsoft\Windows\Windows Feeds"
+    Set-ItemProperty -Path "HKLM:\SOFTWARE\Policies\Microsoft\Windows\Windows Feeds" -Name "EnableFeeds" -Value 0 -Type DWord -Force
+    Ensure-Path "HKLM:\SOFTWARE\Policies\Microsoft\Dsh"
+    Set-ItemProperty -Path "HKLM:\SOFTWARE\Policies\Microsoft\Dsh" -Name "AllowNewsAndInterests" -Value 0 -Type DWord -Force
+    Ensure-Path "HKCU:\SOFTWARE\Microsoft\Windows\CurrentVersion\Feeds"
+    Set-ItemProperty -Path "HKCU:\SOFTWARE\Microsoft\Windows\CurrentVersion\Feeds" -Name "ShellFeedsTaskbarViewMode" -Value 2 -Type DWord -Force
+    Write-Log "News and interests / Widgets disabled (taskbar + policy)" "OK"
+
+    # --- Edge first-run experience ---
+    Ensure-Path "HKLM:\SOFTWARE\Policies\Microsoft\Edge"
+    Set-ItemProperty -Path "HKLM:\SOFTWARE\Policies\Microsoft\Edge" -Name "HideFirstRunExperience" -Value 1 -Type DWord -Force
+    Write-Log "Edge first-run experience hidden" "OK"
+
+    # --- Microsoft Account sign-in nag ---
+    Ensure-Path "HKLM:\SOFTWARE\Microsoft\PolicyManager\current\device\Settings"
+    Set-ItemProperty -Path "HKLM:\SOFTWARE\Microsoft\PolicyManager\current\device\Settings" -Name "AllowYourAccount" -Value 0 -Type DWord -Force -ErrorAction SilentlyContinue
+    Write-Log "Microsoft Account sign-in nag disabled where supported" "OK"
+
+    # --- Sync provider / OneDrive ad in File Explorer ---
+    Ensure-Path "HKCU:\SOFTWARE\Microsoft\Windows\CurrentVersion\Explorer\Advanced"
+    Set-ItemProperty -Path "HKCU:\SOFTWARE\Microsoft\Windows\CurrentVersion\Explorer\Advanced" -Name "ShowSyncProviderNotifications" -Value 0 -Type DWord -Force -ErrorAction SilentlyContinue
+    Write-Log "File Explorer sync-provider ads disabled" "OK"
+
+    Write-Log "POS hardening complete. Most changes apply at next sign-in; News/Widgets and Spotlight changes apply immediately." "WARN"
+    Write-Log "Note: HKCU keys apply to the user that ran the toolkit. If the autologon POS user is a different account, re-run this step under that user." "WARN"
+}

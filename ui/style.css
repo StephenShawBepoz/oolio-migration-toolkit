@@ -687,3 +687,48 @@ input[type="text"]:focus { outline: 2px solid var(--oolio-purple); outline-offse
 }
 .step-input-row { display: flex; align-items: center; gap: 8px; }
 .step-input-row input { max-width: 100%; }
+
+/* ---------- Step progress bar (downloads, msiexec) ---------- */
+.progress-bar-container {
+    margin: 12px 0 10px;
+    padding: 12px 14px;
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+}
+.progress-bar-track {
+    position: relative;
+    height: 10px;
+    background: var(--oolio-purple-light);
+    border-radius: 5px;
+    overflow: hidden;
+    margin-bottom: 8px;
+}
+.progress-bar-fill {
+    height: 100%;
+    width: 0%;
+    background: var(--oolio-purple);
+    border-radius: 5px;
+    transition: width 0.3s ease;
+}
+.progress-bar-fill.indeterminate {
+    background: linear-gradient(
+        90deg,
+        var(--oolio-purple-light) 0%,
+        var(--oolio-purple) 50%,
+        var(--oolio-purple-light) 100%
+    );
+    background-size: 200% 100%;
+    animation: oolio-progress-stripe 1.6s linear infinite;
+    transition: none;
+    width: 100%;
+}
+@keyframes oolio-progress-stripe {
+    0%   { background-position: 100% 0; }
+    100% { background-position: -100% 0; }
+}
+.progress-bar-label {
+    font-family: 'Consolas', 'Courier New', monospace;
+    font-size: 12px;
+    color: var(--text-secondary);
+}
