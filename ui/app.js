@@ -74,18 +74,7 @@ const MODULES = [
             { id: 'check-chrome',      title: 'Check / install Google Chrome', risk: 'safe', showInTypes: ['ST'], note: 'Reports Chrome install path and version. If Chrome is missing, downloads the Google Enterprise MSI and installs it silently (msiexec /qn). Requires internet at this step.' },
             { id: 'check-webview2',    title: 'Check / install Edge WebView2', risk: 'safe', showInTypes: ['ST'], note: 'Required for Windows native Oolio POS and CDS apps. If missing, downloads the Microsoft Evergreen Bootstrapper and installs silently (/silent /install). Requires internet at this step.' },
             { id: 'teamviewer',             title: 'Check / install TeamViewer', risk: 'safe', showInTypes: ['ST'], note: 'Reports TeamViewer install path and version. If missing, downloads the full TeamViewer installer (TeamViewer_Setup_x64.exe) and installs silently with /S. Requires internet at this step.' },
-            { id: 'check-epsonnet-config', title: 'Check / install EpsonNet Config', risk: 'safe', showInTypes: ['ST'], note: 'Network configuration utility for Epson printers. Detects if already installed via known paths and registry. If missing, downloads ENCU from ftp.epson.com, verifies the Epson signature, and installs silently. Requires internet at this step.' },
-            { id: 'printer-utilities', title: 'Printer utilities',   risk: 'safe', showInTypes: ['ST'], linksOnly: true,
-              links: [
-                { label: 'Epson TM Utility',                href: 'https://download.epson-biz.com/modules/pos/' },
-                { label: 'Epson Firmware Updater',          href: 'https://download.epson-biz.com/modules/pos/' },
-                { label: 'Star Utility (TSP / mC-Print)',   href: 'https://www.starmicronics.com/support/allproducts' },
-                { label: 'Star Firmware Updater',           href: 'https://www.starmicronics.com/support/allproducts' },
-                { label: 'Bixolon Utility and Firmware',    href: 'https://www.bixolon.com/sub_support_down.php' },
-                { label: 'Element / Gravity Utility (pending Oolio confirmation)', href: '#' }
-              ],
-              note: 'Open each utility download in your browser. No PowerShell execution. Mark done once installed/handled.'
-            }
+            { id: 'check-epsonnet-config', title: 'Check / install EpsonNet Config', risk: 'safe', showInTypes: ['ST'], note: 'Network configuration utility for Epson printers. Detects if already installed via known paths and registry. If missing, downloads ENCU from ftp.epson.com, verifies the Epson signature, and installs silently. Requires internet at this step.' }
         ]
     },
     {

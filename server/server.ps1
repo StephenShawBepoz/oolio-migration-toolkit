@@ -48,7 +48,6 @@ function Get-DefaultProgress {
             "check-webview2"        = "pending"
             "teamviewer"            = "pending"
             "check-epsonnet-config" = "pending"
-            "printer-utilities"     = "pending"
         }
         oolio = @{
             "deployment-config"  = "pending"
