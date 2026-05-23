@@ -270,6 +270,65 @@ function Invoke-WindowsActiveHours {
     Write-Log "Configuration complete. Verify in Settings > Windows Update > Update Hours - it should show 'Some settings managed by your organisation'." "OK"
 }
 
+function Invoke-WindowsTouchInput {
+    Write-Section "Configuring touch keyboard and input settings"
+
+    function Ensure-Path($p) {
+        if (-not (Test-Path $p)) { New-Item -Path $p -Force | Out-Null }
+    }
+
+    $build   = [System.Environment]::OSVersion.Version.Build
+    $isWin11 = $build -ge 22000
+    Write-Log "Windows build: $build ($( if ($isWin11) { 'Windows 11' } else { 'Windows 10' } ))"
+
+    # Touch keyboard auto-invoke when a text field is tapped.
+    $tabletTipPath = "HKCU:\SOFTWARE\Microsoft\TabletTip\1.7"
+    Ensure-Path $tabletTipPath
+    Set-ItemProperty -Path $tabletTipPath -Name "EnableAutoInvokeEnabled" -Value 1 -Type DWord -Force
+    Write-Log "Touch keyboard auto-invoke enabled (EnableAutoInvokeEnabled=1)" "OK"
+
+    # Touch Keyboard and Handwriting Panel Service - Windows 10 only.
+    # On Win11 this service was removed; the functionality is built in.
+    $svc = Get-Service -Name "TabletInputService" -ErrorAction SilentlyContinue
+    if ($svc) {
+        Set-Service -Name "TabletInputService" -StartupType Automatic -ErrorAction SilentlyContinue
+        if ($svc.Status -ne "Running") {
+            Start-Service -Name "TabletInputService" -ErrorAction SilentlyContinue
+        }
+        $svc   = Get-Service -Name "TabletInputService" -ErrorAction SilentlyContinue
+        $level = if ($svc.Status -eq "Running") { "OK" } else { "WARN" }
+        Write-Log "TabletInputService: StartupType=Automatic, Status=$($svc.Status)" $level
+    } else {
+        Write-Log "TabletInputService not present (touch keyboard is built into Windows 11 - no service needed)" "OK"
+    }
+
+    # On Windows 10, auto-invoke is more reliable in Tablet Mode.
+    # Only enable it if a touch device is actually present.
+    if (-not $isWin11) {
+        $touchDevices = @(Get-PnpDevice -Class 'HIDClass' -ErrorAction SilentlyContinue |
+            Where-Object { $_.FriendlyName -match 'touch screen|touch panel|HID-compliant touch' })
+        if ($touchDevices.Count -gt 0) {
+            Write-Log "Touch device detected: $($touchDevices[0].FriendlyName)"
+            Ensure-Path "HKCU:\SOFTWARE\Microsoft\Windows\CurrentVersion\ImmersiveShell"
+            Set-ItemProperty -Path "HKCU:\SOFTWARE\Microsoft\Windows\CurrentVersion\ImmersiveShell" -Name "TabletMode" -Value 1 -Type DWord -Force
+            Write-Log "Tablet Mode enabled - improves touch keyboard auto-invoke reliability on Windows 10" "OK"
+        } else {
+            Write-Log "No HID touch device detected. Skipping Tablet Mode." "WARN"
+        }
+    }
+
+    # Disable edge swipe gestures (Action Center swipe-right, Task View swipe-left).
+    # On a POS terminal, accidental edge swipes mid-transaction are a nuisance.
+    $edgeUiPath = "HKLM:\SOFTWARE\Policies\Microsoft\Windows\EdgeUI"
+    Ensure-Path $edgeUiPath
+    Set-ItemProperty -Path $edgeUiPath -Name "AllowEdgeSwipe" -Value 0 -Type DWord -Force
+    Write-Log "Edge swipe gestures disabled (AllowEdgeSwipe=0)" "OK"
+    Write-Log "Action Center (swipe from right) and Task View (swipe from left) are now blocked." "OK"
+
+    Write-Log "Touch input configuration complete." "OK"
+    Write-Log "Sign out and back in (or reboot) for HKCU changes to take effect." "WARN"
+}
+
 function Invoke-WindowsHardenPOS {
     Write-Section "Hardening Windows for POS use"
     Write-Log "Disabling consumer-friendly nags (OneDrive sync prompts, Spotlight, Cortana, news/widgets, Edge first-run, etc.)"

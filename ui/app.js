@@ -54,6 +54,8 @@ const MODULES = [
               note: 'Locks Windows Update active hours via Group Policy. Updates only install in a 6-hour window centred on the supplied hour. Recommended: 3 (3am). Also clears NoAutoRebootWithLoggedOnUsers so the autologon user does not block reboots.' },
             { id: 'harden-pos',       title: 'Disable Windows nags / OneDrive / Spotlight', risk: 'warn', showInTypes: ['ST','T'],
               note: 'Turns off OneDrive sync prompts, Windows Spotlight, Cortana, news/widgets, Edge first-run, Microsoft Account sign-in nag, and other consumer-friendly prompts that get in the way on a POS. Idempotent - safe to re-run.' },
+            { id: 'touch-input',      title: 'Configure touch keyboard & disable edge swipes', risk: 'warn', showInTypes: ['ST','T'],
+              note: 'Enables touch keyboard auto-invoke when a text field is tapped. Ensures the Touch Keyboard service is running and set to Automatic. On Windows 10 touch devices, enables Tablet Mode to improve auto-invoke reliability. Disables edge swipe gestures (Action Center swipe-right, Task View swipe-left) to prevent accidental activation during a transaction.' },
             { id: 'check-ip',         title: 'Check IP configuration', risk: 'safe', showInTypes: ['S','ST','T'], note: 'Shows current IP and DHCP status for every active adapter. If a static IP is detected, the migrate flow surfaces a "Switch to DHCP" prompt as an inline action.' },
             { id: 'rename-device',    title: 'Rename device', risk: 'warn', showInTypes: ['S','ST','T'], optional: true,
               requiresInputs: [{ name: 'value', label: 'Suffix (after "Oolio-")', placeholder: 'POS1', prefix: 'Oolio-' }],
@@ -71,7 +73,8 @@ const MODULES = [
         steps: [
             { id: 'check-chrome',      title: 'Check / install Google Chrome', risk: 'safe', showInTypes: ['ST'], note: 'Reports Chrome install path and version. If Chrome is missing, downloads the Google Enterprise MSI and installs it silently (msiexec /qn). Requires internet at this step.' },
             { id: 'check-webview2',    title: 'Check / install Edge WebView2', risk: 'safe', showInTypes: ['ST'], note: 'Required for Windows native Oolio POS and CDS apps. If missing, downloads the Microsoft Evergreen Bootstrapper and installs silently (/silent /install). Requires internet at this step.' },
-            { id: 'teamviewer',        title: 'Check / install TeamViewer', risk: 'safe', showInTypes: ['ST'], note: 'Reports TeamViewer install path and version. If missing, downloads the full TeamViewer installer (TeamViewer_Setup_x64.exe) and installs silently with /S. Requires internet at this step.' },
+            { id: 'teamviewer',             title: 'Check / install TeamViewer', risk: 'safe', showInTypes: ['ST'], note: 'Reports TeamViewer install path and version. If missing, downloads the full TeamViewer installer (TeamViewer_Setup_x64.exe) and installs silently with /S. Requires internet at this step.' },
+            { id: 'check-epsonnet-config', title: 'Check / install EpsonNet Config', risk: 'safe', showInTypes: ['ST'], note: 'Network configuration utility for Epson printers. Detects if already installed via known paths and registry. If missing, downloads ENCU from ftp.epson.com, verifies the Epson signature, and installs silently. Requires internet at this step.' },
             { id: 'printer-utilities', title: 'Printer utilities',   risk: 'safe', showInTypes: ['ST'], linksOnly: true,
               links: [
                 { label: 'Epson TM Utility',                href: 'https://download.epson-biz.com/modules/pos/' },

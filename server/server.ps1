@@ -37,15 +37,18 @@ function Get-DefaultProgress {
             "enable-firewall"  = "pending"
             "active-hours"     = "pending"
             "harden-pos"       = "pending"
+            "touch-input"      = "pending"
             "check-ip"         = "pending"
             "rename-device"    = "pending"
             "clean-desktop"    = "pending"
             "set-wallpaper"    = "pending"
         }
         dependencies = @{
-            "check-chrome"      = "pending"
-            "check-webview2"    = "pending"
-            "printer-utilities" = "pending"
+            "check-chrome"          = "pending"
+            "check-webview2"        = "pending"
+            "teamviewer"            = "pending"
+            "check-epsonnet-config" = "pending"
+            "printer-utilities"     = "pending"
         }
         oolio = @{
             "deployment-config"  = "pending"

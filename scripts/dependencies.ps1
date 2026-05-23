@@ -114,6 +114,85 @@ function Invoke-DepsInstallTeamViewer {
     Remove-Item -Path $installer -Force -ErrorAction SilentlyContinue
 }
 
+function Invoke-DepsCheckEpsonNetConfig {
+    Write-Section "Checking EpsonNet Config"
+
+    $knownPaths = @(
+        "C:\Program Files (x86)\EPSON\EpsonNetConfig\ENConfig.exe",
+        "C:\Program Files\EPSON\EpsonNetConfig\ENConfig.exe"
+    )
+    foreach ($p in $knownPaths) {
+        if (Test-Path $p) {
+            $ver = (Get-Item $p).VersionInfo.FileVersion
+            Write-Log "EpsonNet Config found at: $p" "OK"
+            Write-Log "Version: $ver"
+            return
+        }
+    }
+
+    $regInstalled = @(
+        Get-ItemProperty "HKLM:\SOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall\*" -ErrorAction SilentlyContinue |
+            Where-Object { $_.DisplayName -match 'EpsonNet Config' }
+        Get-ItemProperty "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\*" -ErrorAction SilentlyContinue |
+            Where-Object { $_.DisplayName -match 'EpsonNet Config' }
+    )
+    if ($regInstalled.Count -gt 0) {
+        Write-Log "EpsonNet Config is installed: $($regInstalled[0].DisplayName) $($regInstalled[0].DisplayVersion)" "OK"
+        return
+    }
+
+    Write-Log "EpsonNet Config not found. Downloading installer..." "WARN"
+
+    $url       = "https://ftp.epson.com/drivers/ENCU_4.9.11.exe"
+    $installer = Join-Path $env:TEMP "ENCU_4.9.11.exe"
+
+    Write-Log "Source: $url"
+    if (-not (Invoke-DownloadWithHeartbeat -Url $url -OutFile $installer -ProgressLabel "Downloading EpsonNet Config")) {
+        Write-Log "The terminal needs internet at this point. Re-run when connectivity is available." "WARN"
+        return
+    }
+
+    if (-not (Test-InstallerSignature -Path $installer -ExpectedSubjectLike "*EPSON*")) {
+        Write-Log "Refusing to run unverified installer. The downloaded EXE may be corrupt or tampered with." "ERROR"
+        Remove-Item -Path $installer -Force -ErrorAction SilentlyContinue
+        return
+    }
+
+    Write-Log "Installing silently (/S)..."
+    $proc = Start-Process -FilePath $installer -ArgumentList "/S" -PassThru -NoNewWindow
+    Wait-ProcessWithHeartbeat -Process $proc -Label "Installing EpsonNet Config"
+
+    if ($proc.ExitCode -eq 0) {
+        Write-Log "EpsonNet Config installer exited cleanly." "OK"
+        $found = $false
+        foreach ($p in $knownPaths) {
+            if (Test-Path $p) {
+                $ver = (Get-Item $p).VersionInfo.FileVersion
+                Write-Log "Verified: $p version $ver" "OK"
+                $found = $true
+                break
+            }
+        }
+        if (-not $found) {
+            $check = @(
+                Get-ItemProperty "HKLM:\SOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall\*" -ErrorAction SilentlyContinue |
+                    Where-Object { $_.DisplayName -match 'EpsonNet Config' }
+            )
+            if ($check.Count -gt 0) {
+                Write-Log "Verified via registry: $($check[0].DisplayName) $($check[0].DisplayVersion)" "OK"
+                $found = $true
+            }
+        }
+        if (-not $found) {
+            Write-Log "Installer reported success but EpsonNet Config was not found at known paths. Check Program Files manually." "WARN"
+        }
+    } else {
+        Write-Log "EpsonNet Config installer exited with code $($proc.ExitCode)." "ERROR"
+    }
+
+    Remove-Item -Path $installer -Force -ErrorAction SilentlyContinue
+}
+
 function Invoke-DepsCheckWebView2 {
     Write-Section "Checking Edge WebView2"
 
