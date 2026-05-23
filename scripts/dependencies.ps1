@@ -158,8 +158,8 @@ function Invoke-DepsCheckEpsonNetConfig {
         return
     }
 
-    Write-Log "Installing silently (/S)..."
-    $proc = Start-Process -FilePath $installer -ArgumentList "/S" -PassThru -NoNewWindow
+    Write-Log "Installing silently (/SILENT)..."
+    $proc = Start-Process -FilePath $installer -ArgumentList "/SILENT" -PassThru -NoNewWindow
     Wait-ProcessWithHeartbeat -Process $proc -Label "Installing EpsonNet Config"
 
     if ($proc.ExitCode -eq 0) {
