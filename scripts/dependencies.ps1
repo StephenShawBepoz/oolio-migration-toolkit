@@ -192,6 +192,7 @@ public class EpsonDialogHelper {
     [DllImport("user32.dll")] public static extern bool ShowWindow(IntPtr hWnd, int nCmdShow);
     [DllImport("user32.dll")] public static extern bool SetForegroundWindow(IntPtr hWnd);
     [DllImport("user32.dll")] public static extern bool IsWindowVisible(IntPtr hWnd);
+    [DllImport("user32.dll")] public static extern IntPtr SetFocus(IntPtr hWnd);
     public const uint BM_CLICK = 0x00F5;
     public const int SW_RESTORE = 9;
 
@@ -240,6 +241,8 @@ public class EpsonDialogHelper {
                     [EpsonDialogHelper]::ShowWindow($hwnd, [EpsonDialogHelper]::SW_RESTORE) | Out-Null
                     [EpsonDialogHelper]::SetForegroundWindow($hwnd) | Out-Null
                     Start-Sleep -Milliseconds 300
+                    [EpsonDialogHelper]::SetFocus($btn) | Out-Null
+                    Start-Sleep -Milliseconds 100
                     [EpsonDialogHelper]::SendMessage($btn, [EpsonDialogHelper]::BM_CLICK, [IntPtr]::Zero, [IntPtr]::Zero) | Out-Null
                     Write-Log $Label "OK"
                     return $true
