@@ -39,6 +39,14 @@ function Invoke-DepsCheckChrome {
     Write-Log "Installing silently (msiexec /i /qn /norestart)..."
     $proc = Start-Process -FilePath "msiexec.exe" -ArgumentList @("/i", "`"$msiPath`"", "/qn", "/norestart") -PassThru -NoNewWindow
     Wait-ProcessWithHeartbeat -Process $proc -Label "Installing Chrome (msiexec)"
+    # WaitForExit() ensures ExitCode is flushed — Start-Process can return null
+    # if ExitCode is read before the process handle is fully released.
+    $proc.WaitForExit()
+    $exitCode = $proc.ExitCode
+    Write-Log "msiexec exit code: $exitCode"
+
+    # Give Windows Installer a moment to finish writing files after msiexec exits.
+    Start-Sleep -Seconds 3
 
     # msiexec success codes: 0 = success, 3010 = success (restart required),
     # 1641 = success (restart initiated), 1638 = newer version already present.
@@ -49,11 +57,12 @@ function Invoke-DepsCheckChrome {
         $verPath = if (Test-Path $chromePath) { $chromePath } else { $chromePathx86 }
         $ver = (Get-Item $verPath).VersionInfo.FileVersion
         Write-Log "Chrome installed and verified: $verPath version $ver" "OK"
-        if ($proc.ExitCode -notin $msiSuccessCodes) {
-            Write-Log "Note: msiexec exit code was $($proc.ExitCode) (non-standard but Chrome is present)." "WARN"
+        if ($exitCode -notin $msiSuccessCodes) {
+            Write-Log "Note: msiexec exit code was $exitCode (non-standard but Chrome is present)." "WARN"
         }
     } else {
-        Write-Log "msiexec exited with code $($proc.ExitCode) and Chrome was not found on disk." "ERROR"
+        Write-Log "msiexec exit code $exitCode - Chrome was not found on disk." "ERROR"
+        Write-Log "Common causes: 1618 = another installer running; 1619 = MSI could not be opened; 1603 = fatal error." "WARN"
     }
 
     Remove-Item -Path $msiPath -Force -ErrorAction SilentlyContinue
@@ -245,8 +254,13 @@ public class EpsonDialogHelper {
     Write-Log "Starting installer..."
     $proc = Start-Process -FilePath $installer -ArgumentList "/SILENT" -PassThru
 
-    # Stage 1: WinZip Self-Extractor SFX — click "Setup"
-    # Title: "WinZip Self-Extractor - EpsonNetConfig_v4_9_11_21_(1_Package).exe"
+    # Stage 0: initial "Epson Installer" info dialog — click OK.
+    # This is the first thing ENCU_4.9.11.exe shows before the WinZip SFX runs.
+    Invoke-AutoClick -WinTitle "Epson Installer" -BtnText "OK" -TimeoutSecs 60 `
+        -Label "Epson Installer info dialog: clicked OK"
+
+    # Stage 1: WinZip Self-Extractor — click Setup.
+    # Appears after the info dialog is dismissed; extracts and launches InstallShield.
     Invoke-AutoClick -WinTitle "EpsonNetConfig" -BtnText "Setup" -TimeoutSecs 60 `
         -Label "WinZip SFX: clicked Setup"
 
