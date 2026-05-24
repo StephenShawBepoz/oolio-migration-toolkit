@@ -160,39 +160,84 @@ function Invoke-DepsCheckEpsonNetConfig {
 
     Add-Type -TypeDefinition @"
 using System;
+using System.Collections.Generic;
 using System.Runtime.InteropServices;
+using System.Text;
 public class EpsonDialogHelper {
-    [DllImport("user32.dll")] public static extern IntPtr FindWindow(string lpClassName, string lpWindowName);
     [DllImport("user32.dll")] public static extern IntPtr FindWindowEx(IntPtr parentHandle, IntPtr childAfter, string className, string windowTitle);
-    [DllImport("user32.dll")] public static extern bool PostMessage(IntPtr hWnd, uint Msg, IntPtr wParam, IntPtr lParam);
+    [DllImport("user32.dll")] public static extern IntPtr SendMessage(IntPtr hWnd, uint Msg, IntPtr wParam, IntPtr lParam);
+    [DllImport("user32.dll")] public static extern bool ShowWindow(IntPtr hWnd, int nCmdShow);
+    [DllImport("user32.dll")] public static extern bool SetForegroundWindow(IntPtr hWnd);
+    [DllImport("user32.dll")] public static extern bool EnumWindows(EnumWindowsProc lpEnumFunc, IntPtr lParam);
+    [DllImport("user32.dll")] public static extern int GetWindowText(IntPtr hWnd, StringBuilder lpString, int nMaxCount);
+    [DllImport("user32.dll")] public static extern bool IsWindowVisible(IntPtr hWnd);
+    public delegate bool EnumWindowsProc(IntPtr hWnd, IntPtr lParam);
     public const uint BM_CLICK = 0x00F5;
+    public const int SW_RESTORE = 9;
+
+    public static List<IntPtr> FindWindowsWithTitle(string titleFragment) {
+        var result = new List<IntPtr>();
+        EnumWindows((hWnd, lParam) => {
+            var sb = new StringBuilder(256);
+            GetWindowText(hWnd, sb, 256);
+            if (sb.ToString().IndexOf(titleFragment, StringComparison.OrdinalIgnoreCase) >= 0)
+                result.Add(hWnd);
+            return true;
+        }, IntPtr.Zero);
+        return result;
+    }
 }
 "@ -ErrorAction SilentlyContinue
 
-    Write-Log "Installing silently (/SILENT) - will auto-dismiss Epson info dialog if it appears..."
+    Write-Log "Starting installer - SFX will extract and launch inner setup..."
+    # Do not use -Wait: the SFX exits immediately after spawning the inner installer.
     $proc = Start-Process -FilePath $installer -ArgumentList "/SILENT" -PassThru
 
-    # The Epson SFX wrapper always shows an info dialog regardless of silent flags.
-    # Watch for the window and click OK automatically so the install is hands-free.
-    $dialogTimeout = (Get-Date).AddSeconds(30)
+    # Poll for the Epson info dialog independently of $proc lifetime.
+    # The SFX parent exits in ~2s; the child installer appears shortly after.
+    # We search by partial title so minor title variations don't break the match.
+    $dialogTimeout = (Get-Date).AddSeconds(90)
     $dismissed = $false
-    while (-not $dismissed -and (Get-Date) -lt $dialogTimeout -and -not $proc.HasExited) {
+    while (-not $dismissed -and (Get-Date) -lt $dialogTimeout) {
         Start-Sleep -Milliseconds 500
-        $hwnd = [EpsonDialogHelper]::FindWindow($null, "Epson Installer")
-        if ($hwnd -ne [IntPtr]::Zero) {
+        $windows = [EpsonDialogHelper]::FindWindowsWithTitle("Epson Installer")
+        foreach ($hwnd in $windows) {
+            # Restore the window from the taskbar so SendMessage reaches it.
+            [EpsonDialogHelper]::ShowWindow($hwnd, [EpsonDialogHelper]::SW_RESTORE) | Out-Null
+            [EpsonDialogHelper]::SetForegroundWindow($hwnd) | Out-Null
+            Start-Sleep -Milliseconds 200
+
             $btn = [EpsonDialogHelper]::FindWindowEx($hwnd, [IntPtr]::Zero, "Button", "OK")
             if ($btn -ne [IntPtr]::Zero) {
-                [EpsonDialogHelper]::PostMessage($btn, [EpsonDialogHelper]::BM_CLICK, [IntPtr]::Zero, [IntPtr]::Zero) | Out-Null
+                [EpsonDialogHelper]::SendMessage($btn, [EpsonDialogHelper]::BM_CLICK, [IntPtr]::Zero, [IntPtr]::Zero) | Out-Null
                 Write-Log "Epson installer info dialog auto-dismissed." "OK"
                 $dismissed = $true
+                break
             }
         }
     }
-    if (-not $dismissed -and -not $proc.HasExited) {
-        Write-Log "Epson dialog not detected within 30s - continuing to wait for installer." "WARN"
+
+    if (-not $dismissed) {
+        Write-Log "Epson info dialog was not detected within 90s." "WARN"
     }
 
-    Wait-ProcessWithHeartbeat -Process $proc -Label "Installing EpsonNet Config"
+    # The inner installer runs as a child process we cannot directly track.
+    # Wait for any Epson setup process to finish before declaring success.
+    Write-Log "Waiting for Epson setup to complete..."
+    $installTimeout = (Get-Date).AddSeconds(120)
+    $start = Get-Date
+    while ((Get-Date) -lt $installTimeout) {
+        $epsonProcs = @(Get-Process | Where-Object { $_.Path -and $_.Path -match 'epson|ENCU' })
+        if ($epsonProcs.Count -eq 0) { break }
+        $elapsed = [int]((Get-Date) - $start).TotalSeconds
+        if ($elapsed % 10 -lt 1) {
+            Write-Log "Epson setup still running, elapsed ${elapsed}s"
+        }
+        Start-Sleep -Seconds 1
+    }
+
+    $elapsed = [int]((Get-Date) - $start).TotalSeconds
+    Write-Log "Epson setup finished after ${elapsed}s." "OK"
 
     if ($proc.ExitCode -eq 0) {
         Write-Log "EpsonNet Config installer exited cleanly." "OK"
