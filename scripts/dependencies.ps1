@@ -40,17 +40,20 @@ function Invoke-DepsCheckChrome {
     $proc = Start-Process -FilePath "msiexec.exe" -ArgumentList @("/i", "`"$msiPath`"", "/qn", "/norestart") -PassThru -NoNewWindow
     Wait-ProcessWithHeartbeat -Process $proc -Label "Installing Chrome (msiexec)"
 
-    if ($proc.ExitCode -eq 0) {
-        Write-Log "Chrome installed successfully." "OK"
-        if (Test-Path $chromePath) {
-            $ver = (Get-Item $chromePath).VersionInfo.FileVersion
-            Write-Log "Verified: $chromePath version $ver" "OK"
-        } elseif (Test-Path $chromePathx86) {
-            $ver = (Get-Item $chromePathx86).VersionInfo.FileVersion
-            Write-Log "Verified: $chromePathx86 version $ver" "OK"
+    # msiexec success codes: 0 = success, 3010 = success (restart required),
+    # 1641 = success (restart initiated), 1638 = newer version already present.
+    $msiSuccessCodes = @(0, 3010, 1641, 1638)
+    $chromeFound = (Test-Path $chromePath) -or (Test-Path $chromePathx86)
+
+    if ($chromeFound) {
+        $verPath = if (Test-Path $chromePath) { $chromePath } else { $chromePathx86 }
+        $ver = (Get-Item $verPath).VersionInfo.FileVersion
+        Write-Log "Chrome installed and verified: $verPath version $ver" "OK"
+        if ($proc.ExitCode -notin $msiSuccessCodes) {
+            Write-Log "Note: msiexec exit code was $($proc.ExitCode) (non-standard but Chrome is present)." "WARN"
         }
     } else {
-        Write-Log "msiexec exited with code $($proc.ExitCode)." "ERROR"
+        Write-Log "msiexec exited with code $($proc.ExitCode) and Chrome was not found on disk." "ERROR"
     }
 
     Remove-Item -Path $msiPath -Force -ErrorAction SilentlyContinue
@@ -93,22 +96,28 @@ function Invoke-DepsInstallTeamViewer {
     $proc = Start-Process -FilePath $installer -ArgumentList "/S" -PassThru -NoNewWindow
     Wait-ProcessWithHeartbeat -Process $proc -Label "Installing TeamViewer"
 
-    if ($proc.ExitCode -eq 0) {
-        Write-Log "TeamViewer installer exited cleanly." "OK"
-        $found = $false
-        foreach ($p in $tvPaths) {
-            if (Test-Path $p) {
-                $ver = (Get-Item $p).VersionInfo.FileVersion
-                Write-Log "Verified: $p version $ver" "OK"
-                $found = $true
-                break
-            }
+    # Give the TeamViewer background service installer a moment to finish writing
+    # files after the outer process exits.
+    Start-Sleep -Seconds 5
+
+    $tvFound = $false
+    foreach ($p in $tvPaths) {
+        if (Test-Path $p) {
+            $ver = (Get-Item $p).VersionInfo.FileVersion
+            Write-Log "TeamViewer installed and verified: $p version $ver" "OK"
+            $tvFound = $true
+            break
         }
-        if (-not $found) {
-            Write-Log "Installer reported success but TeamViewer.exe was not found. Check Program Files manually." "WARN"
+    }
+
+    if (-not $tvFound) {
+        if ($proc.ExitCode -eq 0) {
+            Write-Log "Installer exited cleanly but TeamViewer.exe was not found. It may still be installing - check Program Files in a moment." "WARN"
+        } else {
+            Write-Log "TeamViewer installer exited with code $($proc.ExitCode) and TeamViewer.exe was not found on disk." "ERROR"
         }
-    } else {
-        Write-Log "TeamViewer installer exited with code $($proc.ExitCode)." "ERROR"
+    } elseif ($proc.ExitCode -ne 0) {
+        Write-Log "Note: installer exit code was $($proc.ExitCode) (non-standard but TeamViewer is present)." "WARN"
     }
 
     Remove-Item -Path $installer -Force -ErrorAction SilentlyContinue
