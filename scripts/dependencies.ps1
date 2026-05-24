@@ -51,13 +51,31 @@ function Invoke-DepsCheckChrome {
     try { $exitCode = $proc.ExitCode } catch {}
     Write-Log "msiexec exit code: $(if ($null -eq $exitCode) { '(null - process handle lost)' } else { $exitCode })"
 
-    # Give Windows Installer a moment to finish writing files after msiexec exits.
-    Start-Sleep -Seconds 3
+    # The Chrome enterprise MSI extracts a mini_installer.exe and launches it, then
+    # reports success. mini_installer.exe continues running in the background and
+    # writes chrome.exe to Program Files after the MSI process exits. Poll for up
+    # to 3 minutes rather than using a fixed sleep.
+    Write-Log "Waiting for Chrome to appear on disk (mini_installer may still be running)..."
+    $pollDeadline = (Get-Date).AddMinutes(3)
+    $start        = Get-Date
+    $lastLog      = $start
+    $chromeFound  = $false
+    while ((Get-Date) -lt $pollDeadline -and -not $chromeFound) {
+        $chromeFound = (Test-Path $chromePath) -or (Test-Path $chromePathx86)
+        if (-not $chromeFound) {
+            $now = Get-Date
+            if (($now - $lastLog).TotalSeconds -ge 10) {
+                $elapsed = [int]($now - $start).TotalSeconds
+                Write-Log "Still waiting for chrome.exe... (${elapsed}s)"
+                $lastLog = $now
+            }
+            Start-Sleep -Seconds 2
+        }
+    }
 
     # msiexec success codes: 0 = success, 3010 = success (restart required),
     # 1641 = success (restart initiated), 1638 = newer version already present.
     $msiSuccessCodes = @(0, 3010, 1641, 1638)
-    $chromeFound = (Test-Path $chromePath) -or (Test-Path $chromePathx86)
 
     if ($chromeFound) {
         $verPath = if (Test-Path $chromePath) { $chromePath } else { $chromePathx86 }
@@ -67,14 +85,15 @@ function Invoke-DepsCheckChrome {
             Write-Log "Note: msiexec exit code was $exitCode (non-standard but Chrome is present)." "WARN"
         }
     } else {
-        Write-Log "Chrome was not found on disk after install attempt." "ERROR"
+        Write-Log "Chrome was not found on disk after 3 minutes." "ERROR"
         Write-Log "Common msiexec codes: 1618 = another installer running; 1619 = MSI could not be opened; 1603 = fatal error." "WARN"
-        # Surface the MSI log to pinpoint the actual failure reason.
         if (Test-Path $logPath) {
             Write-Log "--- MSI install log (last 30 lines) ---" "WARN"
             $tail = Get-Content $logPath -Tail 30 -ErrorAction SilentlyContinue
             foreach ($line in $tail) {
-                if ($line -match 'error|fail|return value 3|value 2' -and $line -notmatch 'ErrorDialog') {
+                # Only flag lines with genuine failure indicators, not lines that
+                # merely contain the word 'error' in a success message.
+                if ($line -match 'return value 3|Installation failed|Error 1[0-9]{3}' ) {
                     Write-Log $line "ERROR"
                 } elseif ($line.Trim().Length -gt 0) {
                     Write-Log $line
