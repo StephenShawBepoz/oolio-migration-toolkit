@@ -136,6 +136,8 @@ function Invoke-DepsCheckEpsonNetConfig {
     Write-Section "Checking EpsonNet Config"
 
     $knownPaths = @(
+        "C:\Program Files (x86)\EpsonNet\EpsonNet Config V4\ENConfig.exe",
+        "C:\Program Files\EpsonNet\EpsonNet Config V4\ENConfig.exe",
         "C:\Program Files (x86)\EPSON\EpsonNetConfig\ENConfig.exe",
         "C:\Program Files\EPSON\EpsonNetConfig\ENConfig.exe"
     )
@@ -280,12 +282,25 @@ public class EpsonDialogHelper {
         if ($wins.Count -eq 0) { break }
         $clicked = $false
         foreach ($hwnd in $wins) {
+            [EpsonDialogHelper]::ShowWindow($hwnd, [EpsonDialogHelper]::SW_RESTORE) | Out-Null
+            [EpsonDialogHelper]::SetForegroundWindow($hwnd) | Out-Null
+            Start-Sleep -Milliseconds 300
+
+            # License agreement page: "I accept" radio must be clicked before Next is enabled.
+            $acceptBtn = [EpsonDialogHelper]::FindButtonContaining($hwnd, "I accept")
+            if ($acceptBtn -ne [IntPtr]::Zero) {
+                [EpsonDialogHelper]::SetFocus($acceptBtn) | Out-Null
+                Start-Sleep -Milliseconds 100
+                [EpsonDialogHelper]::SendMessage($acceptBtn, [EpsonDialogHelper]::BM_CLICK, [IntPtr]::Zero, [IntPtr]::Zero) | Out-Null
+                Write-Log "InstallShield wizard: accepted license agreement" "OK"
+                Start-Sleep -Milliseconds 400
+            }
+
             foreach ($btn in @("Finish", "Install", "Next")) {
                 $b = [EpsonDialogHelper]::FindButtonContaining($hwnd, $btn)
                 if ($b -ne [IntPtr]::Zero) {
-                    [EpsonDialogHelper]::ShowWindow($hwnd, [EpsonDialogHelper]::SW_RESTORE) | Out-Null
-                    [EpsonDialogHelper]::SetForegroundWindow($hwnd) | Out-Null
-                    Start-Sleep -Milliseconds 300
+                    [EpsonDialogHelper]::SetFocus($b) | Out-Null
+                    Start-Sleep -Milliseconds 100
                     [EpsonDialogHelper]::SendMessage($b, [EpsonDialogHelper]::BM_CLICK, [IntPtr]::Zero, [IntPtr]::Zero) | Out-Null
                     Write-Log "InstallShield wizard: clicked $btn" "OK"
                     $clicked = $true
