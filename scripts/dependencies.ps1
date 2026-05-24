@@ -3,6 +3,12 @@
 function Invoke-DepsCheckChrome {
     Write-Section "Checking Google Chrome"
 
+    $isAdmin = ([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
+    if (-not $isAdmin) {
+        Write-Log "This step requires administrator privileges. Please restart the toolkit as Administrator (right-click Launch.ps1 -> Run as administrator)." "ERROR"
+        return
+    }
+
     $chromePath    = "C:\Program Files\Google\Chrome\Application\chrome.exe"
     $chromePathx86 = "C:\Program Files (x86)\Google\Chrome\Application\chrome.exe"
 
@@ -23,6 +29,7 @@ function Invoke-DepsCheckChrome {
 
     $msiUrl  = "https://dl.google.com/dl/chrome/install/googlechromestandaloneenterprise64.msi"
     $msiPath = Join-Path $env:TEMP "googlechromestandaloneenterprise64.msi"
+    $logPath = Join-Path $env:TEMP "chrome-install.log"
 
     Write-Log "Source: $msiUrl"
     if (-not (Invoke-DownloadWithHeartbeat -Url $msiUrl -OutFile $msiPath -ProgressLabel "Downloading Google Chrome")) {
@@ -37,13 +44,12 @@ function Invoke-DepsCheckChrome {
     }
 
     Write-Log "Installing silently (msiexec /i /qn /norestart)..."
-    $proc = Start-Process -FilePath "msiexec.exe" -ArgumentList @("/i", "`"$msiPath`"", "/qn", "/norestart") -PassThru -NoNewWindow
+    $proc = Start-Process -FilePath "msiexec.exe" -ArgumentList @("/i", "`"$msiPath`"", "/qn", "/norestart", "/l*v", "`"$logPath`"") -PassThru -NoNewWindow
     Wait-ProcessWithHeartbeat -Process $proc -Label "Installing Chrome (msiexec)"
-    # WaitForExit() ensures ExitCode is flushed — Start-Process can return null
-    # if ExitCode is read before the process handle is fully released.
     $proc.WaitForExit()
-    $exitCode = $proc.ExitCode
-    Write-Log "msiexec exit code: $exitCode"
+    $exitCode = $null
+    try { $exitCode = $proc.ExitCode } catch {}
+    Write-Log "msiexec exit code: $(if ($null -eq $exitCode) { '(null - process handle lost)' } else { $exitCode })"
 
     # Give Windows Installer a moment to finish writing files after msiexec exits.
     Start-Sleep -Seconds 3
@@ -61,8 +67,21 @@ function Invoke-DepsCheckChrome {
             Write-Log "Note: msiexec exit code was $exitCode (non-standard but Chrome is present)." "WARN"
         }
     } else {
-        Write-Log "msiexec exit code $exitCode - Chrome was not found on disk." "ERROR"
-        Write-Log "Common causes: 1618 = another installer running; 1619 = MSI could not be opened; 1603 = fatal error." "WARN"
+        Write-Log "Chrome was not found on disk after install attempt." "ERROR"
+        Write-Log "Common msiexec codes: 1618 = another installer running; 1619 = MSI could not be opened; 1603 = fatal error." "WARN"
+        # Surface the MSI log to pinpoint the actual failure reason.
+        if (Test-Path $logPath) {
+            Write-Log "--- MSI install log (last 30 lines) ---" "WARN"
+            $tail = Get-Content $logPath -Tail 30 -ErrorAction SilentlyContinue
+            foreach ($line in $tail) {
+                if ($line -match 'error|fail|return value 3|value 2' -and $line -notmatch 'ErrorDialog') {
+                    Write-Log $line "ERROR"
+                } elseif ($line.Trim().Length -gt 0) {
+                    Write-Log $line
+                }
+            }
+            Remove-Item -Path $logPath -Force -ErrorAction SilentlyContinue
+        }
     }
 
     Remove-Item -Path $msiPath -Force -ErrorAction SilentlyContinue
@@ -70,6 +89,12 @@ function Invoke-DepsCheckChrome {
 
 function Invoke-DepsInstallTeamViewer {
     Write-Section "Installing TeamViewer (full version)"
+
+    $isAdmin = ([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
+    if (-not $isAdmin) {
+        Write-Log "This step requires administrator privileges. Please restart the toolkit as Administrator (right-click Launch.ps1 -> Run as administrator)." "ERROR"
+        return
+    }
 
     $tvPaths = @(
         "C:\Program Files\TeamViewer\TeamViewer.exe",
@@ -262,6 +287,12 @@ function Invoke-DepsCheckEpsonNetConfig {
 
 function Invoke-DepsCheckWebView2 {
     Write-Section "Checking Edge WebView2"
+
+    $isAdmin = ([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
+    if (-not $isAdmin) {
+        Write-Log "This step requires administrator privileges. Please restart the toolkit as Administrator (right-click Launch.ps1 -> Run as administrator)." "ERROR"
+        return
+    }
 
     $regPath   = "HKLM:\SOFTWARE\WOW6432Node\Microsoft\EdgeUpdate\Clients\{F3017226-FE2A-4295-8BDF-00C3A9A7E4C5}"
     $installed = Get-ItemProperty -Path $regPath -ErrorAction SilentlyContinue
