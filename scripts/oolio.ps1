@@ -92,6 +92,40 @@ function Invoke-OolioInstallCDSChrome {
     Write-Log "If primary display is not 1920px wide, update the --window-position X value in the shortcut manually."
 }
 
+function Invoke-OolioInstallKDSChrome {
+    Write-Section "Creating Oolio KDS Chrome kiosk shortcut"
+
+    $chromePath = Get-ChromePath
+    if (-not $chromePath) {
+        Write-Log "Chrome not found. Install Chrome in the dependencies module first." "ERROR"
+        return
+    }
+
+    $assetsDir = "C:\Oolio\Assets"
+    if (-not (Test-Path $assetsDir)) { New-Item -ItemType Directory -Path $assetsDir -Force | Out-Null }
+
+    $iconPath = Join-Path $assetsDir "kds-icon.ico"
+    $iconSet  = $false
+    if (Invoke-DownloadWithHeartbeat -Url "https://kds.oolio.io/favicon.ico" -OutFile $iconPath -ProgressLabel "Downloading KDS icon") {
+        Write-Log "Downloaded icon: $iconPath" "OK"
+        $iconSet = $true
+    } else {
+        Write-Log "Could not download KDS favicon - shortcut will use Chrome default icon." "WARN"
+    }
+
+    $shortcutPath = "C:\Users\Public\Desktop\Oolio KDS.lnk"
+    $shell    = New-Object -ComObject WScript.Shell
+    $shortcut = $shell.CreateShortcut($shortcutPath)
+    $shortcut.TargetPath  = $chromePath
+    $shortcut.Arguments   = "--kiosk https://kds.oolio.io --no-first-run --disable-infobars"
+    $shortcut.WindowStyle = 3
+    if ($iconSet) { $shortcut.IconLocation = "$iconPath,0" }
+    $shortcut.Save()
+
+    Write-Log "Shortcut created: $shortcutPath" "OK"
+    Write-Log "Launches kds.oolio.io in fullscreen kiosk mode."
+}
+
 function Invoke-OolioSetStartup {
     Write-Section "Configuring startup via shell:startup"
 
@@ -101,7 +135,7 @@ function Invoke-OolioSetStartup {
     }
 
     $copied = 0
-    foreach ($name in @("Oolio POS.lnk", "Oolio CDS.lnk")) {
+    foreach ($name in @("Oolio POS.lnk", "Oolio CDS.lnk", "Oolio KDS.lnk")) {
         $src = Join-Path "C:\Users\Public\Desktop" $name
         if (Test-Path $src) {
             Copy-Item -Path $src -Destination (Join-Path $startupFolder $name) -Force

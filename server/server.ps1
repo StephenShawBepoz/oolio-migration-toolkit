@@ -54,6 +54,7 @@ function Get-DefaultProgress {
             "create-folders"     = "pending"
             "install-pos-chrome" = "pending"
             "install-cds-chrome" = "pending"
+            "install-kds-chrome" = "pending"
             "set-startup"        = "pending"
             "final-restart"      = "pending"
         }
