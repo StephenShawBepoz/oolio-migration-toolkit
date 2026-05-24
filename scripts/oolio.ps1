@@ -31,12 +31,25 @@ function Invoke-OolioInstallPOSChrome {
         return
     }
 
+    $assetsDir = "C:\Oolio\Assets"
+    if (-not (Test-Path $assetsDir)) { New-Item -ItemType Directory -Path $assetsDir -Force | Out-Null }
+
+    $iconPath = Join-Path $assetsDir "pos-icon.ico"
+    $iconSet  = $false
+    if (Invoke-DownloadWithHeartbeat -Url "https://pos.oolio.io/favicon.ico" -OutFile $iconPath -ProgressLabel "Downloading POS icon") {
+        Write-Log "Downloaded icon: $iconPath" "OK"
+        $iconSet = $true
+    } else {
+        Write-Log "Could not download POS favicon - shortcut will use Chrome default icon." "WARN"
+    }
+
     $shortcutPath = "C:\Users\Public\Desktop\Oolio POS.lnk"
     $shell    = New-Object -ComObject WScript.Shell
     $shortcut = $shell.CreateShortcut($shortcutPath)
     $shortcut.TargetPath  = $chromePath
     $shortcut.Arguments   = "--kiosk https://pos.oolio.io --no-first-run --disable-infobars"
     $shortcut.WindowStyle = 3
+    if ($iconSet) { $shortcut.IconLocation = "$iconPath,0" }
     $shortcut.Save()
 
     Write-Log "Shortcut created: $shortcutPath" "OK"
@@ -52,6 +65,18 @@ function Invoke-OolioInstallCDSChrome {
         return
     }
 
+    $assetsDir = "C:\Oolio\Assets"
+    if (-not (Test-Path $assetsDir)) { New-Item -ItemType Directory -Path $assetsDir -Force | Out-Null }
+
+    $iconPath = Join-Path $assetsDir "cds-icon.ico"
+    $iconSet  = $false
+    if (Invoke-DownloadWithHeartbeat -Url "https://cds.oolio.io/favicon.ico" -OutFile $iconPath -ProgressLabel "Downloading CDS icon") {
+        Write-Log "Downloaded icon: $iconPath" "OK"
+        $iconSet = $true
+    } else {
+        Write-Log "Could not download CDS favicon - shortcut will use Chrome default icon." "WARN"
+    }
+
     $shortcutPath = "C:\Users\Public\Desktop\Oolio CDS.lnk"
     $shell    = New-Object -ComObject WScript.Shell
     $shortcut = $shell.CreateShortcut($shortcutPath)
@@ -59,6 +84,7 @@ function Invoke-OolioInstallCDSChrome {
     # --window-position=1920,0 places it on the second display assuming 1920px primary
     $shortcut.Arguments   = "--kiosk https://cds.oolio.io --no-first-run --disable-infobars --window-position=1920,0"
     $shortcut.WindowStyle = 3
+    if ($iconSet) { $shortcut.IconLocation = "$iconPath,0" }
     $shortcut.Save()
 
     Write-Log "Shortcut created: $shortcutPath" "OK"
