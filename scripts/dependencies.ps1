@@ -173,20 +173,23 @@ using System.Collections.Generic;
 using System.Runtime.InteropServices;
 using System.Text;
 public class EpsonDialogHelper {
-    [DllImport("user32.dll")] public static extern IntPtr FindWindowEx(IntPtr parentHandle, IntPtr childAfter, string className, string windowTitle);
+    public delegate bool EnumWindowsProc(IntPtr hWnd, IntPtr lParam);
+    public delegate bool EnumChildProc(IntPtr hWnd, IntPtr lParam);
+    [DllImport("user32.dll")] public static extern bool EnumWindows(EnumWindowsProc lpEnumFunc, IntPtr lParam);
+    [DllImport("user32.dll")] public static extern bool EnumChildWindows(IntPtr hWndParent, EnumChildProc lpEnumFunc, IntPtr lParam);
+    [DllImport("user32.dll")] public static extern int GetWindowText(IntPtr hWnd, StringBuilder lpString, int nMaxCount);
+    [DllImport("user32.dll")] public static extern int GetClassName(IntPtr hWnd, StringBuilder lpClassName, int nMaxCount);
     [DllImport("user32.dll")] public static extern IntPtr SendMessage(IntPtr hWnd, uint Msg, IntPtr wParam, IntPtr lParam);
     [DllImport("user32.dll")] public static extern bool ShowWindow(IntPtr hWnd, int nCmdShow);
     [DllImport("user32.dll")] public static extern bool SetForegroundWindow(IntPtr hWnd);
-    [DllImport("user32.dll")] public static extern bool EnumWindows(EnumWindowsProc lpEnumFunc, IntPtr lParam);
-    [DllImport("user32.dll")] public static extern int GetWindowText(IntPtr hWnd, StringBuilder lpString, int nMaxCount);
     [DllImport("user32.dll")] public static extern bool IsWindowVisible(IntPtr hWnd);
-    public delegate bool EnumWindowsProc(IntPtr hWnd, IntPtr lParam);
     public const uint BM_CLICK = 0x00F5;
     public const int SW_RESTORE = 9;
 
     public static List<IntPtr> FindWindowsWithTitle(string titleFragment) {
         var result = new List<IntPtr>();
         EnumWindows((hWnd, lParam) => {
+            if (!IsWindowVisible(hWnd)) return true;
             var sb = new StringBuilder(256);
             GetWindowText(hWnd, sb, 256);
             if (sb.ToString().IndexOf(titleFragment, StringComparison.OrdinalIgnoreCase) >= 0)
@@ -195,58 +198,102 @@ public class EpsonDialogHelper {
         }, IntPtr.Zero);
         return result;
     }
+
+    // Find the first child Button whose text contains buttonTextFragment (case-insensitive).
+    public static IntPtr FindButtonContaining(IntPtr parent, string buttonTextFragment) {
+        IntPtr found = IntPtr.Zero;
+        EnumChildWindows(parent, (hWnd, lParam) => {
+            var cls = new StringBuilder(64);
+            GetClassName(hWnd, cls, 64);
+            if (cls.ToString() == "Button") {
+                var txt = new StringBuilder(256);
+                GetWindowText(hWnd, txt, 256);
+                if (txt.ToString().IndexOf(buttonTextFragment, StringComparison.OrdinalIgnoreCase) >= 0) {
+                    found = hWnd;
+                    return false;
+                }
+            }
+            return true;
+        }, IntPtr.Zero);
+        return found;
+    }
 }
 "@ -ErrorAction SilentlyContinue
 
-    Write-Log "Starting installer - SFX will extract and launch inner setup..."
-    # Do not use -Wait: the SFX exits immediately after spawning the inner installer.
+    # Click a button inside the first matching window. Returns $true if clicked.
+    function Invoke-AutoClick {
+        param([string]$WinTitle, [string]$BtnText, [int]$TimeoutSecs = 60, [string]$Label)
+        $deadline = (Get-Date).AddSeconds($TimeoutSecs)
+        while ((Get-Date) -lt $deadline) {
+            foreach ($hwnd in [EpsonDialogHelper]::FindWindowsWithTitle($WinTitle)) {
+                $btn = [EpsonDialogHelper]::FindButtonContaining($hwnd, $BtnText)
+                if ($btn -ne [IntPtr]::Zero) {
+                    [EpsonDialogHelper]::ShowWindow($hwnd, [EpsonDialogHelper]::SW_RESTORE) | Out-Null
+                    [EpsonDialogHelper]::SetForegroundWindow($hwnd) | Out-Null
+                    Start-Sleep -Milliseconds 300
+                    [EpsonDialogHelper]::SendMessage($btn, [EpsonDialogHelper]::BM_CLICK, [IntPtr]::Zero, [IntPtr]::Zero) | Out-Null
+                    Write-Log $Label "OK"
+                    return $true
+                }
+            }
+            Start-Sleep -Milliseconds 500
+        }
+        Write-Log "Timed out waiting for: $Label" "WARN"
+        return $false
+    }
+
+    Write-Log "Starting installer..."
     $proc = Start-Process -FilePath $installer -ArgumentList "/SILENT" -PassThru
 
-    # Poll for the Epson info dialog independently of $proc lifetime.
-    # The SFX parent exits in ~2s; the child installer appears shortly after.
-    # We search by partial title so minor title variations don't break the match.
-    $dialogTimeout = (Get-Date).AddSeconds(90)
-    $dismissed = $false
-    while (-not $dismissed -and (Get-Date) -lt $dialogTimeout) {
-        Start-Sleep -Milliseconds 500
-        $windows = [EpsonDialogHelper]::FindWindowsWithTitle("Epson Installer")
-        foreach ($hwnd in $windows) {
-            # Restore the window from the taskbar so SendMessage reaches it.
-            [EpsonDialogHelper]::ShowWindow($hwnd, [EpsonDialogHelper]::SW_RESTORE) | Out-Null
-            [EpsonDialogHelper]::SetForegroundWindow($hwnd) | Out-Null
-            Start-Sleep -Milliseconds 200
+    # Stage 1: WinZip Self-Extractor SFX — click "Setup"
+    # Title: "WinZip Self-Extractor - EpsonNetConfig_v4_9_11_21_(1_Package).exe"
+    Invoke-AutoClick -WinTitle "EpsonNetConfig" -BtnText "Setup" -TimeoutSecs 60 `
+        -Label "WinZip SFX: clicked Setup"
 
-            $btn = [EpsonDialogHelper]::FindWindowEx($hwnd, [IntPtr]::Zero, "Button", "OK")
-            if ($btn -ne [IntPtr]::Zero) {
-                [EpsonDialogHelper]::SendMessage($btn, [EpsonDialogHelper]::BM_CLICK, [IntPtr]::Zero, [IntPtr]::Zero) | Out-Null
-                Write-Log "Epson installer info dialog auto-dismissed." "OK"
-                $dismissed = $true
-                break
+    # Stage 2: InstallShield language selection — click "Next"
+    # Title: "EpsonNet Config V4 - InstallShield Wizard"
+    Invoke-AutoClick -WinTitle "EpsonNet Config" -BtnText "Next" -TimeoutSecs 60 `
+        -Label "InstallShield language dialog: clicked Next"
+
+    # Stage 3: Any remaining InstallShield wizard pages (feature select, licence, ready, finish).
+    # Keep clicking Next / Install / Finish until no more EpsonNet Config wizard windows appear.
+    $wizardDeadline = (Get-Date).AddSeconds(180)
+    while ((Get-Date) -lt $wizardDeadline) {
+        $wins = [EpsonDialogHelper]::FindWindowsWithTitle("EpsonNet Config")
+        if ($wins.Count -eq 0) { break }
+        $clicked = $false
+        foreach ($hwnd in $wins) {
+            foreach ($btn in @("Finish", "Install", "Next")) {
+                $b = [EpsonDialogHelper]::FindButtonContaining($hwnd, $btn)
+                if ($b -ne [IntPtr]::Zero) {
+                    [EpsonDialogHelper]::ShowWindow($hwnd, [EpsonDialogHelper]::SW_RESTORE) | Out-Null
+                    [EpsonDialogHelper]::SetForegroundWindow($hwnd) | Out-Null
+                    Start-Sleep -Milliseconds 300
+                    [EpsonDialogHelper]::SendMessage($b, [EpsonDialogHelper]::BM_CLICK, [IntPtr]::Zero, [IntPtr]::Zero) | Out-Null
+                    Write-Log "InstallShield wizard: clicked $btn" "OK"
+                    $clicked = $true
+                    Start-Sleep -Milliseconds 800
+                    break
+                }
             }
+            if ($clicked) { break }
         }
+        if (-not $clicked) { Start-Sleep -Milliseconds 500 }
     }
 
-    if (-not $dismissed) {
-        Write-Log "Epson info dialog was not detected within 90s." "WARN"
-    }
-
-    # The inner installer runs as a child process we cannot directly track.
-    # Wait for any Epson setup process to finish before declaring success.
+    # Wait for all Epson setup processes to exit.
     Write-Log "Waiting for Epson setup to complete..."
-    $installTimeout = (Get-Date).AddSeconds(120)
+    $installDeadline = (Get-Date).AddSeconds(120)
     $start = Get-Date
-    while ((Get-Date) -lt $installTimeout) {
+    while ((Get-Date) -lt $installDeadline) {
         $epsonProcs = @(Get-Process | Where-Object { $_.Path -and $_.Path -match 'epson|ENCU' })
         if ($epsonProcs.Count -eq 0) { break }
         $elapsed = [int]((Get-Date) - $start).TotalSeconds
-        if ($elapsed % 10 -lt 1) {
-            Write-Log "Epson setup still running, elapsed ${elapsed}s"
-        }
+        if ($elapsed % 10 -lt 1) { Write-Log "Epson setup still running, elapsed ${elapsed}s" }
         Start-Sleep -Seconds 1
     }
-
     $elapsed = [int]((Get-Date) - $start).TotalSeconds
-    Write-Log "Epson setup finished after ${elapsed}s." "OK"
+    Write-Log "Epson setup complete after ${elapsed}s." "OK"
 
     if ($proc.ExitCode -eq 0) {
         Write-Log "EpsonNet Config installer exited cleanly." "OK"
