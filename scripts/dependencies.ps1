@@ -186,6 +186,18 @@ function Invoke-DepsCheckEpsonNetConfig {
         if (-not $found) {
             Write-Log "Installer reported success but EpsonNet Config was not found at known paths. Check Program Files manually." "WARN"
         }
+
+        # Remove desktop shortcuts left by the Epson installer.
+        $desktopPaths = @(
+            "C:\Users\Public\Desktop",
+            "$env:USERPROFILE\Desktop"
+        )
+        foreach ($dir in $desktopPaths) {
+            Get-ChildItem -Path $dir -Filter "*EpsonNet*" -ErrorAction SilentlyContinue | ForEach-Object {
+                Remove-Item -Path $_.FullName -Force -ErrorAction SilentlyContinue
+                Write-Log "Removed desktop shortcut: $($_.Name)" "OK"
+            }
+        }
     } else {
         Write-Log "EpsonNet Config installer exited with code $($proc.ExitCode)." "ERROR"
     }
