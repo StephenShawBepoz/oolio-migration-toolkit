@@ -178,193 +178,83 @@ function Invoke-DepsCheckEpsonNetConfig {
         return
     }
 
-    Add-Type -TypeDefinition @"
-using System;
-using System.Collections.Generic;
-using System.Runtime.InteropServices;
-using System.Text;
-public class EpsonDialogHelper {
-    public delegate bool EnumWindowsProc(IntPtr hWnd, IntPtr lParam);
-    public delegate bool EnumChildProc(IntPtr hWnd, IntPtr lParam);
-    [DllImport("user32.dll")] public static extern bool EnumWindows(EnumWindowsProc lpEnumFunc, IntPtr lParam);
-    [DllImport("user32.dll")] public static extern bool EnumChildWindows(IntPtr hWndParent, EnumChildProc lpEnumFunc, IntPtr lParam);
-    [DllImport("user32.dll")] public static extern int GetWindowText(IntPtr hWnd, StringBuilder lpString, int nMaxCount);
-    [DllImport("user32.dll")] public static extern int GetClassName(IntPtr hWnd, StringBuilder lpClassName, int nMaxCount);
-    [DllImport("user32.dll")] public static extern IntPtr SendMessage(IntPtr hWnd, uint Msg, IntPtr wParam, IntPtr lParam);
-    [DllImport("user32.dll")] public static extern bool ShowWindow(IntPtr hWnd, int nCmdShow);
-    [DllImport("user32.dll")] public static extern bool SetForegroundWindow(IntPtr hWnd);
-    [DllImport("user32.dll")] public static extern bool IsWindowVisible(IntPtr hWnd);
-    [DllImport("user32.dll")] public static extern IntPtr SetFocus(IntPtr hWnd);
-    public const uint BM_CLICK = 0x00F5;
-    public const int SW_RESTORE = 9;
+    # The EpsonNet Config installer is a WinZip SFX wrapper around an InstallShield
+    # wizard. /SILENT is not honoured by either layer, and InstallShield wizards
+    # routinely ignore synthetic BM_CLICK window messages — so we don't try to
+    # automate the clicks. Instead: launch the installer, print clear instructions,
+    # and poll for the binary to appear on disk.
+    Write-Log ""
+    Write-Log "===================================================================" "WARN"
+    Write-Log "MANUAL ACTION REQUIRED - click through the EpsonNet Config wizard:" "WARN"
+    Write-Log "  1. Epson Installer dialog       -> click OK" "WARN"
+    Write-Log "  2. WinZip Self-Extractor        -> click Setup" "WARN"
+    Write-Log "  3. Select Setup Language        -> click Next" "WARN"
+    Write-Log "  4. Welcome screen               -> click Next" "WARN"
+    Write-Log "  5. License Agreement            -> select 'I accept', click Next" "WARN"
+    Write-Log "  6. Choose Destination Location  -> click Next" "WARN"
+    Write-Log "  7. Ready to Install             -> click Install" "WARN"
+    Write-Log "  8. Setup Complete               -> click Finish" "WARN"
+    Write-Log "===================================================================" "WARN"
+    Write-Log ""
+    Write-Log "Launching installer - the toolkit will detect completion automatically." "OK"
 
-    public static List<IntPtr> FindWindowsWithTitle(string titleFragment) {
-        var result = new List<IntPtr>();
-        EnumWindows((hWnd, lParam) => {
-            if (!IsWindowVisible(hWnd)) return true;
-            var sb = new StringBuilder(256);
-            GetWindowText(hWnd, sb, 256);
-            if (sb.ToString().IndexOf(titleFragment, StringComparison.OrdinalIgnoreCase) >= 0)
-                result.Add(hWnd);
-            return true;
-        }, IntPtr.Zero);
-        return result;
-    }
+    Start-Process -FilePath $installer
 
-    // Find the first child Button whose text contains buttonTextFragment (case-insensitive).
-    public static IntPtr FindButtonContaining(IntPtr parent, string buttonTextFragment) {
-        IntPtr found = IntPtr.Zero;
-        EnumChildWindows(parent, (hWnd, lParam) => {
-            var cls = new StringBuilder(64);
-            GetClassName(hWnd, cls, 64);
-            if (cls.ToString() == "Button") {
-                var txt = new StringBuilder(256);
-                GetWindowText(hWnd, txt, 256);
-                if (txt.ToString().IndexOf(buttonTextFragment, StringComparison.OrdinalIgnoreCase) >= 0) {
-                    found = hWnd;
-                    return false;
-                }
-            }
-            return true;
-        }, IntPtr.Zero);
-        return found;
-    }
-}
-"@ -ErrorAction SilentlyContinue
-
-    # Click a button inside the first matching window. Returns $true if clicked.
-    function Invoke-AutoClick {
-        param([string]$WinTitle, [string]$BtnText, [int]$TimeoutSecs = 60, [string]$Label)
-        $deadline = (Get-Date).AddSeconds($TimeoutSecs)
-        while ((Get-Date) -lt $deadline) {
-            foreach ($hwnd in [EpsonDialogHelper]::FindWindowsWithTitle($WinTitle)) {
-                $btn = [EpsonDialogHelper]::FindButtonContaining($hwnd, $BtnText)
-                if ($btn -ne [IntPtr]::Zero) {
-                    [EpsonDialogHelper]::ShowWindow($hwnd, [EpsonDialogHelper]::SW_RESTORE) | Out-Null
-                    [EpsonDialogHelper]::SetForegroundWindow($hwnd) | Out-Null
-                    Start-Sleep -Milliseconds 300
-                    [EpsonDialogHelper]::SetFocus($btn) | Out-Null
-                    Start-Sleep -Milliseconds 100
-                    [EpsonDialogHelper]::SendMessage($btn, [EpsonDialogHelper]::BM_CLICK, [IntPtr]::Zero, [IntPtr]::Zero) | Out-Null
-                    Write-Log $Label "OK"
-                    return $true
-                }
-            }
-            Start-Sleep -Milliseconds 500
-        }
-        Write-Log "Timed out waiting for: $Label" "WARN"
-        return $false
-    }
-
-    Write-Log "Starting installer..."
-    $proc = Start-Process -FilePath $installer -ArgumentList "/SILENT" -PassThru
-
-    # Stage 0: initial "Epson Installer" info dialog — click OK.
-    # This is the first thing ENCU_4.9.11.exe shows before the WinZip SFX runs.
-    Invoke-AutoClick -WinTitle "Epson Installer" -BtnText "OK" -TimeoutSecs 60 `
-        -Label "Epson Installer info dialog: clicked OK"
-
-    # Stage 1: WinZip Self-Extractor — click Setup.
-    # Appears after the info dialog is dismissed; extracts and launches InstallShield.
-    Invoke-AutoClick -WinTitle "EpsonNetConfig" -BtnText "Setup" -TimeoutSecs 60 `
-        -Label "WinZip SFX: clicked Setup"
-
-    # Stage 2: InstallShield language selection — click "Next"
-    # Title: "EpsonNet Config V4 - InstallShield Wizard"
-    Invoke-AutoClick -WinTitle "EpsonNet Config" -BtnText "Next" -TimeoutSecs 60 `
-        -Label "InstallShield language dialog: clicked Next"
-
-    # Stage 3: Any remaining InstallShield wizard pages (feature select, licence, ready, finish).
-    # Keep clicking Next / Install / Finish until no more EpsonNet Config wizard windows appear.
-    $wizardDeadline = (Get-Date).AddSeconds(180)
-    while ((Get-Date) -lt $wizardDeadline) {
-        $wins = [EpsonDialogHelper]::FindWindowsWithTitle("EpsonNet Config")
-        if ($wins.Count -eq 0) { break }
-        $clicked = $false
-        foreach ($hwnd in $wins) {
-            [EpsonDialogHelper]::ShowWindow($hwnd, [EpsonDialogHelper]::SW_RESTORE) | Out-Null
-            [EpsonDialogHelper]::SetForegroundWindow($hwnd) | Out-Null
-            Start-Sleep -Milliseconds 300
-
-            # License agreement page: "I accept" radio must be clicked before Next is enabled.
-            $acceptBtn = [EpsonDialogHelper]::FindButtonContaining($hwnd, "I accept")
-            if ($acceptBtn -ne [IntPtr]::Zero) {
-                [EpsonDialogHelper]::SetFocus($acceptBtn) | Out-Null
-                Start-Sleep -Milliseconds 100
-                [EpsonDialogHelper]::SendMessage($acceptBtn, [EpsonDialogHelper]::BM_CLICK, [IntPtr]::Zero, [IntPtr]::Zero) | Out-Null
-                Write-Log "InstallShield wizard: accepted license agreement" "OK"
-                Start-Sleep -Milliseconds 400
-            }
-
-            foreach ($btn in @("Finish", "Install", "Next")) {
-                $b = [EpsonDialogHelper]::FindButtonContaining($hwnd, $btn)
-                if ($b -ne [IntPtr]::Zero) {
-                    [EpsonDialogHelper]::SetFocus($b) | Out-Null
-                    Start-Sleep -Milliseconds 100
-                    [EpsonDialogHelper]::SendMessage($b, [EpsonDialogHelper]::BM_CLICK, [IntPtr]::Zero, [IntPtr]::Zero) | Out-Null
-                    Write-Log "InstallShield wizard: clicked $btn" "OK"
-                    $clicked = $true
-                    Start-Sleep -Milliseconds 800
-                    break
-                }
-            }
-            if ($clicked) { break }
-        }
-        if (-not $clicked) { Start-Sleep -Milliseconds 500 }
-    }
-
-    # Wait for all Epson setup processes to exit.
-    Write-Log "Waiting for Epson setup to complete..."
-    $installDeadline = (Get-Date).AddSeconds(120)
+    # Poll for the installed binary at the known paths. Up to 10 minutes -
+    # plenty of time for a technician to click through the wizard.
+    $pollDeadline = (Get-Date).AddMinutes(10)
     $start = Get-Date
-    while ((Get-Date) -lt $installDeadline) {
-        $epsonProcs = @(Get-Process | Where-Object { $_.Path -and $_.Path -match 'epson|ENCU' })
-        if ($epsonProcs.Count -eq 0) { break }
-        $elapsed = [int]((Get-Date) - $start).TotalSeconds
-        if ($elapsed % 10 -lt 1) { Write-Log "Epson setup still running, elapsed ${elapsed}s" }
-        Start-Sleep -Seconds 1
-    }
-    $elapsed = [int]((Get-Date) - $start).TotalSeconds
-    Write-Log "Epson setup complete after ${elapsed}s." "OK"
-
-    if ($proc.ExitCode -eq 0) {
-        Write-Log "EpsonNet Config installer exited cleanly." "OK"
-        $found = $false
+    $lastLog = $start
+    $found = $false
+    while ((Get-Date) -lt $pollDeadline -and -not $found) {
         foreach ($p in $knownPaths) {
             if (Test-Path $p) {
                 $ver = (Get-Item $p).VersionInfo.FileVersion
-                Write-Log "Verified: $p version $ver" "OK"
+                Write-Log "EpsonNet Config installed and verified: $p version $ver" "OK"
                 $found = $true
                 break
             }
         }
         if (-not $found) {
-            $check = @(
+            # Also poll the uninstall registry as a fallback in case the install
+            # path differs from any of the known ones.
+            $regCheck = @(
                 Get-ItemProperty "HKLM:\SOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall\*" -ErrorAction SilentlyContinue |
                     Where-Object { $_.DisplayName -match 'EpsonNet Config' }
             )
-            if ($check.Count -gt 0) {
-                Write-Log "Verified via registry: $($check[0].DisplayName) $($check[0].DisplayVersion)" "OK"
+            if ($regCheck.Count -gt 0) {
+                Write-Log "EpsonNet Config installed (registry): $($regCheck[0].DisplayName) $($regCheck[0].DisplayVersion)" "OK"
                 $found = $true
+                break
             }
-        }
-        if (-not $found) {
-            Write-Log "Installer reported success but EpsonNet Config was not found at known paths. Check Program Files manually." "WARN"
-        }
 
-        # Remove desktop shortcuts left by the Epson installer.
-        $desktopPaths = @(
-            "C:\Users\Public\Desktop",
-            "$env:USERPROFILE\Desktop"
-        )
-        foreach ($dir in $desktopPaths) {
-            Get-ChildItem -Path $dir -Filter "*EpsonNet*" -ErrorAction SilentlyContinue | ForEach-Object {
-                Remove-Item -Path $_.FullName -Force -ErrorAction SilentlyContinue
-                Write-Log "Removed desktop shortcut: $($_.Name)" "OK"
+            $now = Get-Date
+            if (($now - $lastLog).TotalSeconds -ge 15) {
+                $elapsed = [int]($now - $start).TotalSeconds
+                Write-Log "Still waiting for EpsonNet Config install to complete... (${elapsed}s)"
+                $lastLog = $now
             }
+            Start-Sleep -Seconds 2
         }
-    } else {
-        Write-Log "EpsonNet Config installer exited with code $($proc.ExitCode)." "ERROR"
+    }
+
+    if (-not $found) {
+        Write-Log "Timed out after 10 minutes. EpsonNet Config was not detected." "ERROR"
+        Write-Log "If you did not complete the wizard, re-run this step. If you did complete it but the toolkit didn't detect it, check Program Files manually." "WARN"
+        Remove-Item -Path $installer -Force -ErrorAction SilentlyContinue
+        return
+    }
+
+    # Remove desktop shortcuts left by the Epson installer.
+    $desktopPaths = @(
+        "C:\Users\Public\Desktop",
+        "$env:USERPROFILE\Desktop"
+    )
+    foreach ($dir in $desktopPaths) {
+        Get-ChildItem -Path $dir -Filter "*EpsonNet*" -ErrorAction SilentlyContinue | ForEach-Object {
+            Remove-Item -Path $_.FullName -Force -ErrorAction SilentlyContinue
+            Write-Log "Removed desktop shortcut: $($_.Name)" "OK"
+        }
     }
 
     Remove-Item -Path $installer -Force -ErrorAction SilentlyContinue
