@@ -85,11 +85,11 @@ const MODULES = [
         description: 'Set deployment options, create folders and shortcuts, schedule the final restart.',
         showInTypes: ['ST', 'KDS'],
         steps: [
-            { id: 'deployment-config',  title: 'Deployment options',         risk: 'safe', configStep: true, showInTypes: ['ST'], note: 'Choose deployment mode (Chrome kiosk in v1) and whether a CDS is present.' },
+            { id: 'deployment-config',  title: 'Deployment options',         risk: 'safe', configStep: true, showInTypes: ['ST'], note: 'Choose deployment mode (Chrome fullscreen in v1) and whether a CDS is present.' },
             { id: 'create-folders',     title: 'Create Oolio folders',       risk: 'safe', showInTypes: ['ST','KDS'], note: 'Creates C:\\Oolio and Assets/Certs/Logs subfolders.' },
-            { id: 'install-pos-chrome', title: 'Create Oolio POS shortcut (Chrome kiosk)', risk: 'safe', showInTypes: ['ST'], note: 'Public-desktop shortcut launching pos.oolio.io fullscreen.', showWhen: m => m.deploymentMode === 'chrome' },
-            { id: 'install-cds-chrome', title: 'Create Oolio CDS shortcut (Chrome kiosk)', risk: 'safe', showInTypes: ['ST'], note: 'Public-desktop shortcut launching cds.oolio.io on the second display.', showWhen: m => m.deploymentMode === 'chrome' && m.hasCDS === true },
-            { id: 'install-kds-chrome', title: 'Create Oolio KDS shortcut (Chrome kiosk)', risk: 'safe', showInTypes: ['KDS'], note: 'Public-desktop shortcut launching kds.oolio.io in fullscreen kiosk mode.' },
+            { id: 'install-pos-chrome', title: 'Create Oolio POS shortcut (Chrome fullscreen)', risk: 'safe', showInTypes: ['ST'], note: 'Public-desktop shortcut launching pos.oolio.io in Chrome app mode (fullscreen, no browser UI). Exit with Windows key or Alt+F4.', showWhen: m => m.deploymentMode === 'chrome' },
+            { id: 'install-cds-chrome', title: 'Create Oolio CDS shortcut (Chrome fullscreen)', risk: 'safe', showInTypes: ['ST'], note: 'Public-desktop shortcut launching cds.oolio.io in Chrome app mode on the second display.', showWhen: m => m.deploymentMode === 'chrome' && m.hasCDS === true },
+            { id: 'install-kds-chrome', title: 'Create Oolio KDS shortcut (Chrome fullscreen)', risk: 'safe', showInTypes: ['KDS'], note: 'Public-desktop shortcut launching kds.oolio.io in Chrome app mode (fullscreen, no browser UI). Exit with Windows key or Alt+F4.' },
             { id: 'set-startup',        title: 'Configure startup',          risk: 'warn', showInTypes: ['ST','KDS'], note: 'Copies the Oolio desktop shortcut(s) into shell:startup so the kiosk launches when the autologon user signs in. Also tidies up legacy HKCU Run entries from older toolkit builds.' },
             { id: 'final-restart',      title: 'Schedule final restart',     risk: 'danger', showInTypes: ['ST','KDS'], note: 'Schedules a 30-second restart so the device rename, wallpaper, and autologon changes take effect. Run "shutdown /a" from a command prompt to cancel.' }
         ]
@@ -908,7 +908,7 @@ function renderConfigStep() {
         <div class="form-group">
           <label class="form-group-label">Deployment mode</label>
           <div class="radio-row">
-            <label><input type="radio" name="deploymentMode" value="chrome" ${dm==='chrome'?'checked':''}> Chrome (kiosk)</label>
+            <label><input type="radio" name="deploymentMode" value="chrome" ${dm==='chrome'?'checked':''}> Chrome (fullscreen)</label>
             <label><input type="radio" name="deploymentMode" value="windows" ${dm==='windows'?'checked':''} disabled> Windows app (v2 - not yet available)</label>
           </div>
         </div>

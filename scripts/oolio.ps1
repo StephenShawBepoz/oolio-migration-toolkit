@@ -23,7 +23,7 @@ function Get-ChromePath {
 }
 
 function Invoke-OolioInstallPOSChrome {
-    Write-Section "Creating Oolio POS Chrome kiosk shortcut"
+    Write-Section "Creating Oolio POS Chrome shortcut"
 
     $chromePath = Get-ChromePath
     if (-not $chromePath) {
@@ -47,17 +47,17 @@ function Invoke-OolioInstallPOSChrome {
     $shell    = New-Object -ComObject WScript.Shell
     $shortcut = $shell.CreateShortcut($shortcutPath)
     $shortcut.TargetPath  = $chromePath
-    $shortcut.Arguments   = "--kiosk https://pos.oolio.io --no-first-run --disable-infobars"
+    $shortcut.Arguments   = "--app=https://pos.oolio.io --start-fullscreen --no-first-run --disable-infobars"
     $shortcut.WindowStyle = 3
     if ($iconSet) { $shortcut.IconLocation = "$iconPath,0" }
     $shortcut.Save()
 
     Write-Log "Shortcut created: $shortcutPath" "OK"
-    Write-Log "Launches pos.oolio.io in fullscreen kiosk mode."
+    Write-Log "Launches pos.oolio.io fullscreen (app mode). Exit: Windows key or Alt+F4."
 }
 
 function Invoke-OolioInstallCDSChrome {
-    Write-Section "Creating Oolio CDS Chrome kiosk shortcut"
+    Write-Section "Creating Oolio CDS Chrome shortcut"
 
     $chromePath = Get-ChromePath
     if (-not $chromePath) {
@@ -82,7 +82,7 @@ function Invoke-OolioInstallCDSChrome {
     $shortcut = $shell.CreateShortcut($shortcutPath)
     $shortcut.TargetPath  = $chromePath
     # --window-position=1920,0 places it on the second display assuming 1920px primary
-    $shortcut.Arguments   = "--kiosk https://cds.oolio.io --no-first-run --disable-infobars --window-position=1920,0"
+    $shortcut.Arguments   = "--app=https://cds.oolio.io --start-fullscreen --no-first-run --disable-infobars --window-position=1920,0"
     $shortcut.WindowStyle = 3
     if ($iconSet) { $shortcut.IconLocation = "$iconPath,0" }
     $shortcut.Save()
@@ -93,7 +93,7 @@ function Invoke-OolioInstallCDSChrome {
 }
 
 function Invoke-OolioInstallKDSChrome {
-    Write-Section "Creating Oolio KDS Chrome kiosk shortcut"
+    Write-Section "Creating Oolio KDS Chrome shortcut"
 
     $chromePath = Get-ChromePath
     if (-not $chromePath) {
@@ -117,13 +117,13 @@ function Invoke-OolioInstallKDSChrome {
     $shell    = New-Object -ComObject WScript.Shell
     $shortcut = $shell.CreateShortcut($shortcutPath)
     $shortcut.TargetPath  = $chromePath
-    $shortcut.Arguments   = "--kiosk https://kds.oolio.io --no-first-run --disable-infobars"
+    $shortcut.Arguments   = "--app=https://kds.oolio.io --start-fullscreen --no-first-run --disable-infobars"
     $shortcut.WindowStyle = 3
     if ($iconSet) { $shortcut.IconLocation = "$iconPath,0" }
     $shortcut.Save()
 
     Write-Log "Shortcut created: $shortcutPath" "OK"
-    Write-Log "Launches kds.oolio.io in fullscreen kiosk mode."
+    Write-Log "Launches kds.oolio.io fullscreen (app mode). Exit: Windows key or Alt+F4."
 }
 
 function Invoke-OolioSetStartup {
