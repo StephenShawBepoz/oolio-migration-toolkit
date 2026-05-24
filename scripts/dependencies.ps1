@@ -158,8 +158,40 @@ function Invoke-DepsCheckEpsonNetConfig {
         return
     }
 
-    Write-Log "Installing silently (/SILENT)..."
-    $proc = Start-Process -FilePath $installer -ArgumentList "/SILENT" -PassThru -NoNewWindow
+    Add-Type -TypeDefinition @"
+using System;
+using System.Runtime.InteropServices;
+public class EpsonDialogHelper {
+    [DllImport("user32.dll")] public static extern IntPtr FindWindow(string lpClassName, string lpWindowName);
+    [DllImport("user32.dll")] public static extern IntPtr FindWindowEx(IntPtr parentHandle, IntPtr childAfter, string className, string windowTitle);
+    [DllImport("user32.dll")] public static extern bool PostMessage(IntPtr hWnd, uint Msg, IntPtr wParam, IntPtr lParam);
+    public const uint BM_CLICK = 0x00F5;
+}
+"@ -ErrorAction SilentlyContinue
+
+    Write-Log "Installing silently (/SILENT) - will auto-dismiss Epson info dialog if it appears..."
+    $proc = Start-Process -FilePath $installer -ArgumentList "/SILENT" -PassThru
+
+    # The Epson SFX wrapper always shows an info dialog regardless of silent flags.
+    # Watch for the window and click OK automatically so the install is hands-free.
+    $dialogTimeout = (Get-Date).AddSeconds(30)
+    $dismissed = $false
+    while (-not $dismissed -and (Get-Date) -lt $dialogTimeout -and -not $proc.HasExited) {
+        Start-Sleep -Milliseconds 500
+        $hwnd = [EpsonDialogHelper]::FindWindow($null, "Epson Installer")
+        if ($hwnd -ne [IntPtr]::Zero) {
+            $btn = [EpsonDialogHelper]::FindWindowEx($hwnd, [IntPtr]::Zero, "Button", "OK")
+            if ($btn -ne [IntPtr]::Zero) {
+                [EpsonDialogHelper]::PostMessage($btn, [EpsonDialogHelper]::BM_CLICK, [IntPtr]::Zero, [IntPtr]::Zero) | Out-Null
+                Write-Log "Epson installer info dialog auto-dismissed." "OK"
+                $dismissed = $true
+            }
+        }
+    }
+    if (-not $dismissed -and -not $proc.HasExited) {
+        Write-Log "Epson dialog not detected within 30s - continuing to wait for installer." "WARN"
+    }
+
     Wait-ProcessWithHeartbeat -Process $proc -Label "Installing EpsonNet Config"
 
     if ($proc.ExitCode -eq 0) {
