@@ -13,6 +13,11 @@
 
 $ErrorActionPreference = 'Stop'
 
+# Bypass execution policy for this process only - the bootstrap itself ran via
+# iex (which the policy doesn't gate), but invoking the downloaded .ps1 file
+# does, so we relax it here. Scope=Process means we don't change machine policy.
+try { Set-ExecutionPolicy -Scope Process -ExecutionPolicy Bypass -Force } catch {}
+
 $rawUrl      = 'https://raw.githubusercontent.com/StephenShawBepoz/oolio-migration-toolkit/main/tools/Internet-Check.ps1'
 $installRoot = 'C:\OolioTools\InternetCheck'
 $scriptPath  = Join-Path $installRoot 'Internet-Check.ps1'
@@ -67,4 +72,12 @@ Write-Host "Press Ctrl+C to stop and save a summary." -ForegroundColor Yellow
 Write-Host ""
 
 # Run in the same window so the tech can watch it live and Ctrl+C cleanly.
-& $scriptPath -OutputFolder $logFolder -IntervalSeconds $interval -VenueLabel $venue
+# Try the direct invocation first (fast); fall back to powershell.exe with an
+# explicit -ExecutionPolicy Bypass argument if Group Policy locks the process
+# scope (rare but happens on managed devices).
+try {
+    & $scriptPath -OutputFolder $logFolder -IntervalSeconds $interval -VenueLabel $venue
+} catch [System.Management.Automation.PSSecurityException] {
+    Write-Host "Execution policy blocked direct invocation - relaunching via powershell.exe -ExecutionPolicy Bypass..." -ForegroundColor Yellow
+    & powershell.exe -NoProfile -ExecutionPolicy Bypass -File $scriptPath -OutputFolder $logFolder -IntervalSeconds $interval -VenueLabel $venue
+}
