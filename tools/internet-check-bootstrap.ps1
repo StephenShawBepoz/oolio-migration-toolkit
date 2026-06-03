@@ -72,12 +72,7 @@ Write-Host "Press Ctrl+C to stop and save a summary." -ForegroundColor Yellow
 Write-Host ""
 
 # Run in the same window so the tech can watch it live and Ctrl+C cleanly.
-# Try the direct invocation first (fast); fall back to powershell.exe with an
-# explicit -ExecutionPolicy Bypass argument if Group Policy locks the process
-# scope (rare but happens on managed devices).
-try {
-    & $scriptPath -OutputFolder $logFolder -IntervalSeconds $interval -VenueLabel $venue
-} catch [System.Management.Automation.PSSecurityException] {
-    Write-Host "Execution policy blocked direct invocation - relaunching via powershell.exe -ExecutionPolicy Bypass..." -ForegroundColor Yellow
-    & powershell.exe -NoProfile -ExecutionPolicy Bypass -File $scriptPath -OutputFolder $logFolder -IntervalSeconds $interval -VenueLabel $venue
-}
+# Always launch via powershell.exe -ExecutionPolicy Bypass -File so the
+# downloaded script runs regardless of the machine's execution policy
+# (including Group Policy-locked AllSigned / RemoteSigned setups).
+& powershell.exe -NoProfile -ExecutionPolicy Bypass -File $scriptPath -OutputFolder $logFolder -IntervalSeconds $interval -VenueLabel $venue
