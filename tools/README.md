@@ -6,7 +6,17 @@ Standalone scripts that don't depend on the main toolkit. Copy individual files 
 
 24-hour connectivity monitor for a Windows POS terminal. Designed for the case where Wi-Fi stays up but the internet drops and the 4G fallback doesn't kick in — captures the data you need to take to the venue's network person.
 
-### Run
+### Run — Option A: one-liner (recommended)
+
+Paste into an elevated PowerShell prompt (or ScreenConnect command). Downloads the latest script, drops it in `C:\OolioTools\InternetCheck\`, prompts for an optional venue label, and runs it live:
+
+```powershell
+iwr https://raw.githubusercontent.com/StephenShawBepoz/oolio-migration-toolkit/main/tools/internet-check-bootstrap.ps1 -UseBasicParsing | iex
+```
+
+CSV + log files land in `C:\OolioTools\InternetCheck\logs\`.
+
+### Run — Option B: copy the file manually
 
 ```powershell
 # From a PowerShell window opened in the script's folder
