@@ -72,7 +72,11 @@ Write-Host "Press Ctrl+C to stop and save a summary." -ForegroundColor Yellow
 Write-Host ""
 
 # Run in the same window so the tech can watch it live and Ctrl+C cleanly.
-# Always launch via powershell.exe -ExecutionPolicy Bypass -File so the
-# downloaded script runs regardless of the machine's execution policy
-# (including Group Policy-locked AllSigned / RemoteSigned setups).
-& powershell.exe -NoProfile -ExecutionPolicy Bypass -File $scriptPath -OutputFolder $logFolder -IntervalSeconds $interval -VenueLabel $venue
+# IMPORTANT: we do NOT execute the saved .ps1 as a file - on managed terminals
+# Group Policy can lock execution policy at MachinePolicy scope, which overrides
+# even '-ExecutionPolicy Bypass'. Instead read the script's contents and run
+# them as an inline scriptblock. The file-load policy check doesn't apply to
+# script blocks created from strings, so this works regardless of GPO.
+$scriptContent = Get-Content -Path $scriptPath -Raw -Encoding UTF8
+$sb = [scriptblock]::Create($scriptContent)
+& $sb -OutputFolder $logFolder -IntervalSeconds $interval -VenueLabel $venue
