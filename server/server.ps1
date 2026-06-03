@@ -33,10 +33,15 @@ function Get-DefaultProgress {
             "consolidate-backups"  = "pending"
         }
         windows = @{
+            "check-join"       = "pending"
             "verify-autologon" = "pending"
             "enable-firewall"  = "pending"
             "active-hours"     = "pending"
             "harden-pos"       = "pending"
+            "touch-pos"            = "pending"
+            "power-plan"           = "pending"
+            "disable-distractions" = "pending"
+            "locale-time"          = "pending"
             "check-ip"         = "pending"
             "rename-device"    = "pending"
             "clean-desktop"    = "pending"
@@ -65,9 +70,78 @@ function Get-DefaultProgress {
     }
 }
 
-if (-not (Test-Path $progressPath)) {
-    Get-DefaultProgress | ConvertTo-Json -Depth 5 | Set-Content -Path $progressPath -Encoding UTF8
+# Atomic JSON write: write to .tmp then Move-Item -Force so a crash mid-write
+# never leaves progress.json half-written.
+function Save-AtomicJson {
+    param([string]$Path, [string]$Json)
+    $tmp = "$Path.tmp"
+    Set-Content -Path $tmp -Value $Json -Encoding UTF8
+    Move-Item -Path $tmp -Destination $Path -Force
 }
+
+if (-not (Test-Path $progressPath)) {
+    Save-AtomicJson -Path $progressPath -Json (Get-DefaultProgress | ConvertTo-Json -Depth 5)
+}
+
+# ----- CSRF token -----
+# Mint a random per-session token at startup. Inject into index.html and require
+# it on POST /progress and GET /run. Mitigates same-browser cross-origin abuse
+# (any page open in the same browser as the toolkit can otherwise hit localhost).
+$bytes = New-Object byte[] 24
+[System.Security.Cryptography.RandomNumberGenerator]::Create().GetBytes($bytes)
+$script:CsrfToken = ([System.BitConverter]::ToString($bytes)).Replace("-", "").ToLower()
+
+# ----- Per-step locking -----
+# Stop two browser tabs (or a double-click) launching the same step twice. Keyed
+# by "moduleId/stepId". Cleared in the streaming function's finally block.
+$script:ActiveSteps = @{}
+
+# ----- Manifest validator -----
+# Catch UI/router/module drift at boot. For every router entry, confirm the
+# referenced function actually exists in the matching module script. Also warn
+# if Get-DefaultProgress is missing keys that exist in the router.
+function Test-StepManifest {
+    param([string]$ScriptsPath)
+    $issues = @()
+    $defaults = Get-DefaultProgress
+    $scriptMap = @{
+        "bepoz"        = "bepoz.ps1"
+        "windows"      = "windows.ps1"
+        "dependencies" = "dependencies.ps1"
+        "oolio"        = "oolio.ps1"
+    }
+    # Pull the router table by inspecting the function source.
+    $routerSrc = (Get-Command Get-StepFunctionName).ScriptBlock.ToString()
+    foreach ($mod in $scriptMap.Keys) {
+        $modScript = Join-Path $ScriptsPath $scriptMap[$mod]
+        if (-not (Test-Path $modScript)) { $issues += "Missing module script: $modScript"; continue }
+        $modContent = Get-Content -Path $modScript -Raw
+        # Crude but effective: extract function names defined in the module.
+        $defined = [regex]::Matches($modContent, '(?m)^\s*function\s+([A-Za-z][A-Za-z0-9_-]+)') | ForEach-Object { $_.Groups[1].Value }
+        # Each module's router block looks like: "module" = @{ "step" = "Func" ... }
+        $blockMatch = [regex]::Match($routerSrc, "`"$mod`"\s*=\s*@\{([^}]*)\}", 'Singleline')
+        if (-not $blockMatch.Success) { $issues += "Router has no block for module '$mod'"; continue }
+        $stepPairs = [regex]::Matches($blockMatch.Groups[1].Value, '"([^"]+)"\s*=\s*"([^"]+)"')
+        foreach ($m in $stepPairs) {
+            $stepId = $m.Groups[1].Value
+            $func   = $m.Groups[2].Value
+            if ($defined -notcontains $func) {
+                $issues += "Router maps $mod/$stepId -> $func but $func is not defined in $($scriptMap[$mod])"
+            }
+            if (-not $defaults[$mod].ContainsKey($stepId)) {
+                $issues += "Router maps $mod/$stepId but Get-DefaultProgress has no entry for it"
+            }
+        }
+    }
+    if ($issues.Count -gt 0) {
+        Write-Output "==== STEP MANIFEST ISSUES ===="
+        foreach ($i in $issues) { Write-Output "  $i" }
+        Write-Output "=============================="
+    } else {
+        Write-Output "Step manifest OK ($($scriptMap.Count) modules validated)."
+    }
+}
+Test-StepManifest -ScriptsPath $scriptsPath
 
 # ----- Reset stale 'running' statuses on startup -----
 # If the toolkit was killed mid-step (browser closed, terminal rebooted, etc.) the step
@@ -94,7 +168,7 @@ function Reset-StaleRunningStatuses {
             }
         }
         if ($changed -gt 0) {
-            ($obj | ConvertTo-Json -Depth 5) | Set-Content -Path $Path -Encoding UTF8
+            Save-AtomicJson -Path $Path -Json ($obj | ConvertTo-Json -Depth 5)
             Write-Output "Reset $changed stale running step(s)."
         }
     } catch {
@@ -185,8 +259,9 @@ function Get-QueryValue {
 }
 
 function Send-SSE {
+    # Returns $true on success, $false if the client has disconnected. Callers use
+    # the return value to detect closed-tab sessions and kill the running child.
     param($Response, [string]$Data)
-    # Each line in $Data becomes its own data: line, then a blank line terminates the event
     $payload = ""
     foreach ($line in ($Data -split "`r?`n")) {
         $payload += "data: $line`n"
@@ -196,8 +271,9 @@ function Send-SSE {
     try {
         $Response.OutputStream.Write($bytes, 0, $bytes.Length)
         $Response.OutputStream.Flush()
+        return $true
     } catch {
-        # Client disconnected
+        return $false
     }
 }
 
@@ -231,22 +307,39 @@ function Invoke-StepStreaming {
             return
         }
 
+        # Per-step locking: refuse a second concurrent run of the same step.
+        $stepKey = "$ModuleId/$StepId"
+        if ($script:ActiveSteps.ContainsKey($stepKey)) {
+            $null = Send-SSE -Response $Response -Data "__ERROR__: Step '$stepKey' is already running in another browser tab. Wait for it to finish or close the other tab."
+            $null = Send-SSE -Response $Response -Data "__DONE__"
+            return
+        }
+        $script:ActiveSteps[$stepKey] = $true
+        $lockHeld = $true
+
         function Quote-PSLiteral($s) { if ($null -eq $s) { return "''" }; return "'" + ($s -replace "'", "''") + "'" }
 
         $value = $Params["value"]
 
-        # Build a child-PowerShell command that dot-sources shared + module, then calls the function.
-        # Output is line-buffered to stdout so we can stream it back as SSE.
+        # Build a child-PowerShell command. Non-secret args go on the command
+        # line; secrets (verify-autologon credentials) go through environment
+        # variables so they never appear in Process Explorer, Sysmon, or ETW.
         $argSegment = ""
+        $childEnv = @{}
         if ($StepId -eq "rename-device") {
             $argSegment = " -terminalName " + (Quote-PSLiteral $value)
         } elseif ($StepId -eq "set-wallpaper") {
             $argSegment = " -toolkitRoot " + (Quote-PSLiteral $ToolkitRoot)
         } elseif ($StepId -eq "verify-autologon") {
-            $u = $Params["username"]; $p = $Params["password"]; $d = $Params["domain"]
-            $argSegment = " -username " + (Quote-PSLiteral $u) + " -password " + (Quote-PSLiteral $p) + " -domain " + (Quote-PSLiteral $d)
+            # Credentials supplied via env vars - the function reads them, then
+            # the parent clears them from this process when the child exits.
+            $childEnv["OOLIO_AL_USERNAME"] = [string]$Params["username"]
+            $childEnv["OOLIO_AL_PASSWORD"] = [string]$Params["password"]
+            $childEnv["OOLIO_AL_DOMAIN"]   = [string]$Params["domain"]
         } elseif ($StepId -eq "active-hours") {
             $argSegment = " -updateHour " + (Quote-PSLiteral $value)
+        } elseif ($StepId -eq "locale-time") {
+            $argSegment = " -timeZone " + (Quote-PSLiteral $value)
         }
 
         $command = ". '$sharedScript'; . '$moduleScriptPath'; $functionName$argSegment"
@@ -258,6 +351,9 @@ function Invoke-StepStreaming {
         $psi.RedirectStandardError  = $true
         $psi.UseShellExecute = $false
         $psi.CreateNoWindow = $true
+        foreach ($k in $childEnv.Keys) {
+            $psi.EnvironmentVariables[$k] = $childEnv[$k]
+        }
 
         $proc = New-Object System.Diagnostics.Process
         $proc.StartInfo = $psi
@@ -269,10 +365,21 @@ function Invoke-StepStreaming {
         # Stream stdout line by line, teeing each line to the session log.
         # __PROGRESS__: lines are UI-only ephemera (one JSON line per second per
         # long-running step) - skip them in the log file to keep it readable.
+        # If Send-SSE reports the client has disconnected, kill the child so a
+        # closed-tab session does not keep mutating the terminal.
+        $clientGone = $false
         while (-not $proc.StandardOutput.EndOfStream) {
             $line = $proc.StandardOutput.ReadLine()
             if ($null -ne $line) {
-                Send-SSE -Response $Response -Data $line
+                if (-not $clientGone) {
+                    $ok = Send-SSE -Response $Response -Data $line
+                    if (-not $ok) {
+                        $clientGone = $true
+                        Write-SessionLog "[client-disconnected] killing child step process"
+                        try { $proc.Kill() } catch {}
+                        break
+                    }
+                }
                 if (-not $line.StartsWith('__PROGRESS__:')) {
                     Write-SessionLog $line
                 }
@@ -307,6 +414,7 @@ function Invoke-StepStreaming {
         Write-SessionLog $errMsg
         Send-SSE -Response $Response -Data "__DONE__"
     } finally {
+        if ($lockHeld -and $stepKey) { $script:ActiveSteps.Remove($stepKey) }
         try { $Response.OutputStream.Close() } catch {}
     }
 }
@@ -327,7 +435,22 @@ try {
                     break
                 }
                 '^GET /$' {
-                    Write-FileResponse -Response $response -Path (Join-Path $uiPath "index.html") -ContentType "text/html; charset=utf-8"
+                    # Inject the per-session CSRF token into index.html so app.js
+                    # can read it from a meta tag and attach it to subsequent
+                    # POST /progress and GET /run calls.
+                    $indexPath = Join-Path $uiPath "index.html"
+                    if (-not (Test-Path $indexPath)) {
+                        Write-TextResponse -Response $response -Body "404 Not Found" -Status 404
+                    } else {
+                        $html = Get-Content -Path $indexPath -Raw -Encoding UTF8
+                        $meta = "<meta name=`"oolio-token`" content=`"$($script:CsrfToken)`">"
+                        if ($html -match '<meta name="oolio-token"') {
+                            $html = [regex]::Replace($html, '<meta name="oolio-token"[^>]*>', $meta)
+                        } else {
+                            $html = $html -replace '(?i)</head>', "    $meta`r`n</head>"
+                        }
+                        Write-TextResponse -Response $response -Body $html -ContentType "text/html; charset=utf-8"
+                    }
                     break
                 }
                 '^GET /app\.js$' {
@@ -340,20 +463,25 @@ try {
                 }
                 '^GET /progress$' {
                     if (-not (Test-Path $progressPath)) {
-                        Get-DefaultProgress | ConvertTo-Json -Depth 5 | Set-Content -Path $progressPath -Encoding UTF8
+                        Save-AtomicJson -Path $progressPath -Json (Get-DefaultProgress | ConvertTo-Json -Depth 5)
                     }
                     $body = Get-Content -Path $progressPath -Raw -Encoding UTF8
                     Write-TextResponse -Response $response -Body $body -ContentType "application/json; charset=utf-8"
                     break
                 }
                 '^POST /progress$' {
+                    # CSRF: header check before any side-effecting work.
+                    $hdrToken = $request.Headers["X-Oolio-Token"]
+                    if ($hdrToken -ne $script:CsrfToken) {
+                        Write-TextResponse -Response $response -Body '{"status":"error","message":"csrf"}' -ContentType "application/json" -Status 403
+                        break
+                    }
                     $reader = New-Object System.IO.StreamReader($request.InputStream, $request.ContentEncoding)
                     $body = $reader.ReadToEnd()
                     $reader.Close()
-                    # Validate JSON before writing
                     try {
                         $null = $body | ConvertFrom-Json
-                        Set-Content -Path $progressPath -Value $body -Encoding UTF8
+                        Save-AtomicJson -Path $progressPath -Json $body
                         Write-TextResponse -Response $response -Body '{"status":"ok"}' -ContentType "application/json"
                     } catch {
                         Write-TextResponse -Response $response -Body '{"status":"error","message":"invalid json"}' -ContentType "application/json" -Status 400
@@ -361,6 +489,14 @@ try {
                     break
                 }
                 '^GET /run$' {
+                    # CSRF: token may come via header (EventSource cannot set
+                    # headers) or query string. Both are accepted.
+                    $hdrToken = $request.Headers["X-Oolio-Token"]
+                    $qToken   = Get-QueryValue -Query $request.Url.Query -Key "t"
+                    if (($hdrToken -ne $script:CsrfToken) -and ($qToken -ne $script:CsrfToken)) {
+                        Write-TextResponse -Response $response -Body "403 Forbidden" -Status 403
+                        break
+                    }
                     $moduleId = Get-QueryValue -Query $request.Url.Query -Key "module"
                     $stepId   = Get-QueryValue -Query $request.Url.Query -Key "step"
                     if (-not $moduleId -or -not $stepId) {

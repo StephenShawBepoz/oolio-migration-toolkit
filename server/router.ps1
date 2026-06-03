@@ -15,10 +15,15 @@ function Get-StepFunctionName {
             "consolidate-backups"  = "Invoke-BepozConsolidateBackups"
         }
         "windows" = @{
+            "check-join"       = "Invoke-WindowsCheckJoin"
             "verify-autologon" = "Invoke-WindowsVerifyAutologon"
             "enable-firewall"  = "Invoke-WindowsEnableFirewall"
             "active-hours"     = "Invoke-WindowsActiveHours"
             "harden-pos"       = "Invoke-WindowsHardenPOS"
+            "touch-pos"             = "Invoke-WindowsTouchPOS"
+            "power-plan"            = "Invoke-WindowsPowerPlan"
+            "disable-distractions"  = "Invoke-WindowsDisableDistractions"
+            "locale-time"           = "Invoke-WindowsLocaleTime"
             "check-ip"         = "Invoke-WindowsCheckIP"
             "switch-dhcp"      = "Invoke-WindowsSwitchDHCP"
             "rename-device"    = "Invoke-WindowsRenameDevice"

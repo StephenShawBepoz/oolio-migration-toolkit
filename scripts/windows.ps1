@@ -1,11 +1,67 @@
 # windows.ps1 - Module 2: Windows Settings step functions
 
+function Invoke-WindowsCheckJoin {
+    Write-Section "Detecting domain / Azure AD join state"
+
+    # AD join: Win32_ComputerSystem.PartOfDomain. AAD join: dsregcmd /status.
+    $cs = Get-CimInstance -ClassName Win32_ComputerSystem -ErrorAction SilentlyContinue
+    $adJoined = $false
+    if ($cs) {
+        $adJoined = [bool]$cs.PartOfDomain
+        Write-Log "Computer name: $($cs.Name)"
+        Write-Log "Workgroup / Domain: $($cs.Domain)"
+        Write-Log "PartOfDomain (AD): $adJoined"
+    }
+
+    $aadJoined        = $false
+    $domainJoined     = $false
+    $workplaceJoined  = $false
+    try {
+        $dsreg = & dsregcmd /status 2>&1 | Out-String
+        foreach ($line in ($dsreg -split "`r?`n")) {
+            if ($line -match 'AzureAdJoined\s*:\s*(YES|NO)')   { $aadJoined       = ($matches[1] -eq 'YES') }
+            if ($line -match 'DomainJoined\s*:\s*(YES|NO)')    { $domainJoined    = ($matches[1] -eq 'YES') }
+            if ($line -match 'WorkplaceJoined\s*:\s*(YES|NO)') { $workplaceJoined = ($matches[1] -eq 'YES') }
+        }
+    } catch {
+        Write-Log "dsregcmd not available or failed: $($_.Exception.Message)" "WARN"
+    }
+
+    Write-Log "AzureAdJoined:    $aadJoined"
+    Write-Log "DomainJoined:     $domainJoined"
+    Write-Log "WorkplaceJoined:  $workplaceJoined"
+
+    # Classify the terminal so downstream advice is specific.
+    $state = "Standalone / Workgroup"
+    if ($adJoined -and $aadJoined)      { $state = "Hybrid AD + Azure AD joined" }
+    elseif ($adJoined)                   { $state = "AD domain joined" }
+    elseif ($aadJoined)                  { $state = "Azure AD joined" }
+    elseif ($workplaceJoined)            { $state = "Workplace joined (registered, not joined)" }
+
+    Write-Log "Terminal state: $state" "OK"
+
+    if ($state -ne "Standalone / Workgroup") {
+        Write-Log "Caution: this terminal is managed. The following steps may be controlled by Group Policy or Intune and will be reverted at the next policy refresh:" "WARN"
+        Write-Log "  - Autologon (AutoAdminLogon)" "WARN"
+        Write-Log "  - Windows Update active hours" "WARN"
+        Write-Log "  - Wallpaper / lock screen" "WARN"
+        Write-Log "  - Notification / Cortana / news-and-interests policies" "WARN"
+        Write-Log "Confirm with the venue / IT contact before proceeding, or expect to repeat these steps after every reboot." "WARN"
+    } else {
+        Write-Log "Standalone terminal - safe to apply all hardening steps." "OK"
+    }
+}
+
 function Invoke-WindowsVerifyAutologon {
-    param(
-        [string]$username = "",
-        [string]$password = "",
-        [string]$domain   = ""
-    )
+    # Credentials come from environment variables set by the server when it
+    # launches this child process. Keeping them out of the command line means
+    # they never appear in Process Explorer, Sysmon, ETW, or event logs.
+    $username = $env:OOLIO_AL_USERNAME
+    $password = $env:OOLIO_AL_PASSWORD
+    $domain   = $env:OOLIO_AL_DOMAIN
+    if ($null -eq $username) { $username = "" }
+    if ($null -eq $password) { $password = "" }
+    if ($null -eq $domain)   { $domain   = "" }
 
     Write-Section "Verifying autologon configuration"
 
@@ -351,4 +407,214 @@ function Invoke-WindowsHardenPOS {
 
     Write-Log "POS hardening complete. Most changes apply at next sign-in; News/Widgets and Spotlight changes apply immediately." "WARN"
     Write-Log "Note: HKCU keys apply to the user that ran the toolkit. If the autologon POS user is a different account, re-run this step under that user." "WARN"
+}
+
+function Invoke-WindowsTouchPOS {
+    Write-Section "Hardening touch input for POS use"
+
+    function Ensure-Path($p) { if (-not (Test-Path $p)) { New-Item -Path $p -Force | Out-Null } }
+
+    # --- Touch keyboard auto-popup in desktop mode (so it shows when a text field is focused) ---
+    Ensure-Path "HKCU:\SOFTWARE\Microsoft\TabletTip\1.7"
+    Set-ItemProperty -Path "HKCU:\SOFTWARE\Microsoft\TabletTip\1.7" -Name "EnableDesktopModeAutoInvoke" -Value 1 -Type DWord -Force
+    Write-Log "Touch keyboard auto-popup enabled in desktop mode (EnableDesktopModeAutoInvoke=1)" "OK"
+
+    # --- Disable edge swipes (Action Center, task view, app switcher) ---
+    Ensure-Path "HKLM:\SOFTWARE\Policies\Microsoft\Windows\EdgeUI"
+    Set-ItemProperty -Path "HKLM:\SOFTWARE\Policies\Microsoft\Windows\EdgeUI" -Name "AllowEdgeSwipe"     -Value 0 -Type DWord -Force
+    Set-ItemProperty -Path "HKLM:\SOFTWARE\Policies\Microsoft\Windows\EdgeUI" -Name "DisableCharmsHint" -Value 1 -Type DWord -Force
+    Set-ItemProperty -Path "HKLM:\SOFTWARE\Policies\Microsoft\Windows\EdgeUI" -Name "DisableTLcorner"   -Value 1 -Type DWord -Force
+    Set-ItemProperty -Path "HKLM:\SOFTWARE\Policies\Microsoft\Windows\EdgeUI" -Name "DisableCorners"    -Value 1 -Type DWord -Force
+    Write-Log "Edge swipes, charms hint, and hot corners disabled" "OK"
+
+    # --- Force desktop mode (no tablet mode), always boot to desktop ---
+    Ensure-Path "HKCU:\SOFTWARE\Microsoft\Windows\CurrentVersion\ImmersiveShell"
+    Set-ItemProperty -Path "HKCU:\SOFTWARE\Microsoft\Windows\CurrentVersion\ImmersiveShell" -Name "TabletMode"  -Value 0 -Type DWord -Force
+    Set-ItemProperty -Path "HKCU:\SOFTWARE\Microsoft\Windows\CurrentVersion\ImmersiveShell" -Name "SignInMode"  -Value 1 -Type DWord -Force
+    Write-Log "Tablet mode disabled; sign-in always lands in desktop mode" "OK"
+
+    # --- Disable accessibility-key prompts (5x Shift -> Sticky Keys dialog mid-sale, etc.) ---
+    Ensure-Path "HKCU:\Control Panel\Accessibility\StickyKeys"
+    Set-ItemProperty -Path "HKCU:\Control Panel\Accessibility\StickyKeys"        -Name "Flags" -Value "506" -Force
+    Ensure-Path "HKCU:\Control Panel\Accessibility\Keyboard Response"
+    Set-ItemProperty -Path "HKCU:\Control Panel\Accessibility\Keyboard Response" -Name "Flags" -Value "122" -Force
+    Ensure-Path "HKCU:\Control Panel\Accessibility\ToggleKeys"
+    Set-ItemProperty -Path "HKCU:\Control Panel\Accessibility\ToggleKeys"        -Name "Flags" -Value "58"  -Force
+    Write-Log "Sticky / Filter / Toggle Keys prompts disabled" "OK"
+
+    # --- Disable USB autoplay / autorun ---
+    Ensure-Path "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Policies\Explorer"
+    Set-ItemProperty -Path "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Policies\Explorer" -Name "NoDriveTypeAutoRun" -Value 255 -Type DWord -Force
+    Set-ItemProperty -Path "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Policies\Explorer" -Name "NoAutorun"          -Value 1   -Type DWord -Force
+    Write-Log "USB autoplay / autorun disabled on all drive types" "OK"
+
+    Write-Log "Touch POS hardening complete. Most changes apply immediately; tablet-mode lock applies at next sign-in." "WARN"
+}
+
+function Invoke-WindowsPowerPlan {
+    Write-Section "Configuring power plan for always-on POS"
+
+    # Never sleep, never turn off display, on AC. (Battery values set too for hybrid devices.)
+    powercfg /change standby-timeout-ac 0
+    powercfg /change standby-timeout-dc 0
+    powercfg /change monitor-timeout-ac 0
+    powercfg /change monitor-timeout-dc 0
+    powercfg /change hibernate-timeout-ac 0
+    powercfg /change hibernate-timeout-dc 0
+    powercfg /change disk-timeout-ac 0
+    powercfg /change disk-timeout-dc 0
+    Write-Log "Sleep / monitor / hibernate / disk-spindown timeouts set to 0 (never) on AC and DC" "OK"
+
+    # Turn off hibernation entirely - reclaims hiberfil.sys, prevents fast-startup confusion
+    powercfg /hibernate off
+    Write-Log "Hibernation disabled (hiberfil.sys removed)" "OK"
+
+    # Disable fast startup so reboots are real reboots (kiosk app picks up changes)
+    $hiberPath = "HKLM:\SYSTEM\CurrentControlSet\Control\Session Manager\Power"
+    if (Test-Path $hiberPath) {
+        Set-ItemProperty -Path $hiberPath -Name "HiberbootEnabled" -Value 0 -Type DWord -Force
+        Write-Log "Fast Startup disabled (HiberbootEnabled=0) so reboots are full restarts" "OK"
+    }
+
+    # Disable lid-close action (mostly relevant for laptop POS) - do nothing on close
+    powercfg /setacvalueindex SCHEME_CURRENT SUB_BUTTONS LIDACTION 0 2>$null
+    powercfg /setdcvalueindex SCHEME_CURRENT SUB_BUTTONS LIDACTION 0 2>$null
+    powercfg /setactive SCHEME_CURRENT
+    Write-Log "Lid-close action set to 'do nothing'" "OK"
+
+    Write-Log "Power plan configured for 24/7 operation." "OK"
+}
+
+function Invoke-WindowsDisableDistractions {
+    Write-Section "Disabling notifications, Game Bar, Copilot, Storage Sense"
+
+    function Ensure-Path($p) { if (-not (Test-Path $p)) { New-Item -Path $p -Force | Out-Null } }
+
+    # --- Toast notifications ---
+    Ensure-Path "HKCU:\SOFTWARE\Microsoft\Windows\CurrentVersion\PushNotifications"
+    Set-ItemProperty -Path "HKCU:\SOFTWARE\Microsoft\Windows\CurrentVersion\PushNotifications" -Name "ToastEnabled" -Value 0 -Type DWord -Force
+    Ensure-Path "HKCU:\SOFTWARE\Policies\Microsoft\Windows\Explorer"
+    Set-ItemProperty -Path "HKCU:\SOFTWARE\Policies\Microsoft\Windows\Explorer" -Name "DisableNotificationCenter" -Value 1 -Type DWord -Force
+    Write-Log "Toast notifications and Notification Center disabled" "OK"
+
+    # --- Focus Assist / Quiet Hours: keep silent ---
+    Ensure-Path "HKCU:\SOFTWARE\Microsoft\Windows\CurrentVersion\Notifications\Settings"
+    Set-ItemProperty -Path "HKCU:\SOFTWARE\Microsoft\Windows\CurrentVersion\Notifications\Settings" -Name "NOC_GLOBAL_SETTING_ALLOW_TOASTS_ABOVE_LOCK"         -Value 0 -Type DWord -Force -ErrorAction SilentlyContinue
+    Set-ItemProperty -Path "HKCU:\SOFTWARE\Microsoft\Windows\CurrentVersion\Notifications\Settings" -Name "NOC_GLOBAL_SETTING_ALLOW_CRITICAL_TOASTS_ABOVE_LOCK" -Value 0 -Type DWord -Force -ErrorAction SilentlyContinue
+    Write-Log "Above-lock-screen toasts disabled" "OK"
+
+    # --- Xbox Game Bar (the Win+G overlay) ---
+    Ensure-Path "HKCU:\SOFTWARE\Microsoft\GameBar"
+    Set-ItemProperty -Path "HKCU:\SOFTWARE\Microsoft\GameBar" -Name "UseNexusForGameBarEnabled"   -Value 0 -Type DWord -Force
+    Set-ItemProperty -Path "HKCU:\SOFTWARE\Microsoft\GameBar" -Name "ShowStartupPanel"            -Value 0 -Type DWord -Force
+    Ensure-Path "HKCU:\System\GameConfigStore"
+    Set-ItemProperty -Path "HKCU:\System\GameConfigStore" -Name "GameDVR_Enabled" -Value 0 -Type DWord -Force
+    Ensure-Path "HKLM:\SOFTWARE\Policies\Microsoft\Windows\GameDVR"
+    Set-ItemProperty -Path "HKLM:\SOFTWARE\Policies\Microsoft\Windows\GameDVR" -Name "AllowGameDVR" -Value 0 -Type DWord -Force
+    Write-Log "Xbox Game Bar and Game DVR disabled" "OK"
+
+    # --- Windows Copilot ---
+    Ensure-Path "HKCU:\SOFTWARE\Policies\Microsoft\Windows\WindowsCopilot"
+    Set-ItemProperty -Path "HKCU:\SOFTWARE\Policies\Microsoft\Windows\WindowsCopilot" -Name "TurnOffWindowsCopilot" -Value 1 -Type DWord -Force
+    Ensure-Path "HKLM:\SOFTWARE\Policies\Microsoft\Windows\WindowsCopilot"
+    Set-ItemProperty -Path "HKLM:\SOFTWARE\Policies\Microsoft\Windows\WindowsCopilot" -Name "TurnOffWindowsCopilot" -Value 1 -Type DWord -Force
+    Ensure-Path "HKCU:\SOFTWARE\Microsoft\Windows\Shell\Copilot"
+    Set-ItemProperty -Path "HKCU:\SOFTWARE\Microsoft\Windows\Shell\Copilot" -Name "IsCopilotAvailable" -Value 0 -Type DWord -Force -ErrorAction SilentlyContinue
+    Write-Log "Windows Copilot disabled (policy + per-user)" "OK"
+
+    # --- Storage Sense (auto-deletes 'old' files - could nuke Bepoz backup zips) ---
+    Ensure-Path "HKCU:\SOFTWARE\Microsoft\Windows\CurrentVersion\StorageSense\Parameters\StoragePolicy"
+    Set-ItemProperty -Path "HKCU:\SOFTWARE\Microsoft\Windows\CurrentVersion\StorageSense\Parameters\StoragePolicy" -Name "01" -Value 0 -Type DWord -Force -ErrorAction SilentlyContinue
+    Ensure-Path "HKLM:\SOFTWARE\Policies\Microsoft\Windows\StorageSense"
+    Set-ItemProperty -Path "HKLM:\SOFTWARE\Policies\Microsoft\Windows\StorageSense" -Name "AllowStorageSenseGlobal" -Value 0 -Type DWord -Force
+    Write-Log "Storage Sense disabled (won't auto-delete backup zips)" "OK"
+
+    # --- Taskbar: hide Search box, Task View, Widgets, Meet Now ---
+    Ensure-Path "HKCU:\SOFTWARE\Microsoft\Windows\CurrentVersion\Search"
+    Set-ItemProperty -Path "HKCU:\SOFTWARE\Microsoft\Windows\CurrentVersion\Search" -Name "SearchboxTaskbarMode" -Value 0 -Type DWord -Force -ErrorAction SilentlyContinue
+    Ensure-Path "HKCU:\SOFTWARE\Microsoft\Windows\CurrentVersion\Explorer\Advanced"
+    Set-ItemProperty -Path "HKCU:\SOFTWARE\Microsoft\Windows\CurrentVersion\Explorer\Advanced" -Name "ShowTaskViewButton" -Value 0 -Type DWord -Force -ErrorAction SilentlyContinue
+    Set-ItemProperty -Path "HKCU:\SOFTWARE\Microsoft\Windows\CurrentVersion\Explorer\Advanced" -Name "TaskbarDa"          -Value 0 -Type DWord -Force -ErrorAction SilentlyContinue
+    Ensure-Path "HKLM:\SOFTWARE\Microsoft\PolicyManager\current\device\Start"
+    Set-ItemProperty -Path "HKLM:\SOFTWARE\Microsoft\PolicyManager\current\device\Start" -Name "HideRecommendedSection" -Value 1 -Type DWord -Force -ErrorAction SilentlyContinue
+    Write-Log "Taskbar Search box, Task View button, and Widgets icon hidden" "OK"
+
+    # --- First-sign-in animation ---
+    Ensure-Path "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Policies\System"
+    Set-ItemProperty -Path "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Policies\System" -Name "EnableFirstLogonAnimation" -Value 0 -Type DWord -Force
+    Write-Log "First-sign-in animation disabled" "OK"
+
+    Write-Log "Distractions cleanup complete. Taskbar / Copilot / Game Bar changes apply at next sign-in." "WARN"
+}
+
+function Invoke-WindowsLocaleTime {
+    param([string]$timeZone)
+
+    Write-Section "Configuring locale and time"
+
+    if (-not $timeZone -or $timeZone.Trim() -eq "") {
+        Write-Log "No time zone provided. Defaulting to 'AUS Eastern Standard Time' (Sydney/Melbourne)." "WARN"
+        $timeZone = "AUS Eastern Standard Time"
+    }
+    $timeZone = $timeZone.Trim()
+
+    # --- Set time zone ---
+    $current = (Get-TimeZone).Id
+    Write-Log "Current time zone: $current"
+    if ($current -eq $timeZone) {
+        Write-Log "Time zone already set to $timeZone." "OK"
+    } else {
+        try {
+            # Capture both stdout and stderr so a bad zone name produces a
+            # useful message ("The time zone X was not found.") rather than
+            # just an exit code.
+            $tzOutput = & tzutil /s "$timeZone" 2>&1
+            if ($LASTEXITCODE -eq 0) {
+                Write-Log "Time zone set to: $timeZone" "OK"
+            } else {
+                Write-Log "tzutil exited with code $LASTEXITCODE." "ERROR"
+                foreach ($line in @($tzOutput)) {
+                    if ($line -and "$line".Trim().Length -gt 0) {
+                        Write-Log "  tzutil: $line" "ERROR"
+                    }
+                }
+                Write-Log "Run 'tzutil /l' on the terminal to list valid zone names." "WARN"
+                return
+            }
+        } catch {
+            Write-Log "Failed to set time zone: $_" "ERROR"
+            return
+        }
+    }
+
+    # --- Sync time with NTP pool ---
+    Write-Log "Configuring NTP source and forcing resync..."
+    try {
+        $svc = Get-Service -Name "w32time" -ErrorAction SilentlyContinue
+        if ($svc -and $svc.Status -ne "Running") {
+            Set-Service -Name "w32time" -StartupType Automatic -ErrorAction SilentlyContinue
+            Start-Service -Name "w32time" -ErrorAction SilentlyContinue
+            Write-Log "Started Windows Time service (w32time)" "OK"
+        }
+        w32tm /config /manualpeerlist:"au.pool.ntp.org,pool.ntp.org,time.windows.com" /syncfromflags:manual /reliable:YES /update | Out-Null
+        w32tm /resync /force | Out-Null
+        Write-Log "NTP sources set to au.pool.ntp.org + fallbacks; resync forced" "OK"
+        $status = w32tm /query /status 2>&1 | Out-String
+        Write-Log ("Time status:`n" + $status.Trim())
+    } catch {
+        Write-Log "Time sync configuration failed: $_" "WARN"
+    }
+
+    # --- Locale / region: en-AU, AUD, short-date dd/MM/yyyy ---
+    try {
+        Set-WinSystemLocale     -SystemLocale en-AU -ErrorAction SilentlyContinue
+        Set-WinUserLanguageList -LanguageList en-AU -Force -ErrorAction SilentlyContinue
+        Set-WinHomeLocation     -GeoId 12 -ErrorAction SilentlyContinue   # 12 = Australia
+        Set-Culture en-AU -ErrorAction SilentlyContinue
+        Write-Log "System locale, user language, and culture set to en-AU (GeoId 12)" "OK"
+    } catch {
+        Write-Log "Locale configuration partial: $_" "WARN"
+    }
+
+    Write-Log "Locale and time configured. System locale change requires a restart to fully apply." "WARN"
 }

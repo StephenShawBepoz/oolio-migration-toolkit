@@ -28,9 +28,11 @@ const MODULES = [
             { id: 'zip-data',            title: 'Zip Bepoz data',        risk: 'safe',   showInTypes: ['S','ST'], note: 'Compresses the DataPath folder into the BackupPath using .NET ZipFile (no 2 GB limit). Server and server-till only.' },
             { id: 'clear-startup',       title: 'Clear shell:startup',   risk: 'warn',   showInTypes: ['ST','T'], note: 'Removes everything from the user shell:startup folder. Till and server-till only.' },
             { id: 'check-run-key',       title: 'Export & clean HKCU Run key', risk: 'warn', showInTypes: ['ST','T'], note: 'Exports the full HKCU Run key to C:\\OolioBackup\\HKCU_Run_<timestamp>.reg, then removes known Bepoz Run entries. Restore with reg import if needed.' },
-            { id: 'delete-registry',     title: 'Delete Bepoz registry', risk: 'danger', showInTypes: ['ST','T'], note: 'Removes HKCU\\Software\\Backoffice. Make sure the data backup is complete first.' },
+            { id: 'delete-registry',     title: 'Delete Bepoz registry', risk: 'danger', showInTypes: ['ST','T'], note: 'Removes HKCU\\Software\\Backoffice. Make sure the data backup is complete first.',
+              preview: ['Deletes registry key HKCU\\Software\\Backoffice and every value/subkey beneath it.', 'Does not touch HKLM autologon, HKCU Run, or any non-Bepoz key.'] },
             { id: 'consolidate-backups', title: 'Consolidate backups & remove Bepoz folder', risk: 'danger', showInTypes: ['ST','T'],
-              note: 'Moves all .zip files from C:\\Bepoz\\Backup\\ (recursive) to C:\\OolioBackup\\, then removes C:\\Bepoz\\ and all its contents. Aborts if no Bepoz_Data_*.zip ends up in the destination.' }
+              note: 'Moves all .zip files from C:\\Bepoz\\Backup\\ (recursive) to C:\\OolioBackup\\, then removes C:\\Bepoz\\ and all its contents. Aborts if no Bepoz_Data_*.zip ends up in the destination.',
+              preview: ['Moves every *.zip under C:\\Bepoz\\Backup\\ into C:\\OolioBackup\\.', 'Then recursively deletes C:\\Bepoz\\ and everything in it.', 'Aborts (no deletion) if no Bepoz_Data_*.zip lands in the destination.'] }
         ]
     },
     {
@@ -40,6 +42,8 @@ const MODULES = [
         description: 'Verify autologon, firewall, network, then rename / clean the device.',
         showInTypes: ['S', 'ST', 'T'],
         steps: [
+            { id: 'check-join',       title: 'Detect domain / Azure AD join state', risk: 'safe', showInTypes: ['S','ST','T'],
+              note: 'Reports whether this terminal is standalone, AD-joined, Azure AD-joined, or hybrid. Managed terminals may have Group Policy or Intune that overrides several hardening steps - this surfaces that risk before you spend time on changes that will be reverted at the next policy refresh.' },
             { id: 'verify-autologon', title: 'Verify & enable autologon', risk: 'warn', showInTypes: ['S','ST','T'],
               requiresInputs: [
                 { name: 'username', label: 'Username', placeholder: 'e.g. POSUser' },
@@ -54,6 +58,15 @@ const MODULES = [
               note: 'Locks Windows Update active hours via Group Policy. Updates only install in a 6-hour window centred on the supplied hour. Recommended: 3 (3am). Also clears NoAutoRebootWithLoggedOnUsers so the autologon user does not block reboots.' },
             { id: 'harden-pos',       title: 'Disable Windows nags / OneDrive / Spotlight', risk: 'warn', showInTypes: ['ST','T'],
               note: 'Turns off OneDrive sync prompts, Windows Spotlight, Cortana, news/widgets, Edge first-run, Microsoft Account sign-in nag, and other consumer-friendly prompts that get in the way on a POS. Idempotent - safe to re-run.' },
+            { id: 'touch-pos',        title: 'Harden touch input (keyboard / swipes / autoplay)', risk: 'warn', showInTypes: ['ST','T'],
+              note: 'Enables touch keyboard auto-popup in desktop mode, disables edge swipes and hot corners, forces desktop mode (no tablet mode), suppresses Sticky/Filter/Toggle Keys prompts, and disables USB autoplay/autorun. Idempotent.' },
+            { id: 'power-plan',       title: 'Power plan (never sleep, hibernate off)', risk: 'warn', showInTypes: ['ST','T'],
+              note: 'Sets sleep, monitor, hibernate, and disk-spindown timeouts to 0 on AC and DC, disables hibernation entirely (reclaims hiberfil.sys), turns off Fast Startup so reboots are real reboots, and sets lid-close action to do nothing.' },
+            { id: 'disable-distractions', title: 'Disable notifications, Game Bar, Copilot, Storage Sense', risk: 'warn', showInTypes: ['ST','T'],
+              note: 'Disables toast notifications and Notification Center, Xbox Game Bar / Game DVR, Windows Copilot, Storage Sense (so backup zips aren\'t auto-deleted), the Search box, Task View button, and Widgets icon on the taskbar. Idempotent.' },
+            { id: 'locale-time',      title: 'Locale and time (en-AU + NTP sync)', risk: 'safe', showInTypes: ['ST','T'],
+              requiresInputs: [{ name: 'value', label: 'Time zone (Windows ID)', placeholder: 'AUS Eastern Standard Time' }],
+              note: 'Sets the Windows time zone, points w32time at au.pool.ntp.org with fallbacks, forces an NTP resync, and sets system locale / user language / culture to en-AU (GeoId 12 = Australia). Run "tzutil /l" to see valid zone names if Sydney/Melbourne is not the right pick.' },
             { id: 'check-ip',         title: 'Check IP configuration', risk: 'safe', showInTypes: ['S','ST','T'], note: 'Shows current IP and DHCP status for every active adapter. If a static IP is detected, the migrate flow surfaces a "Switch to DHCP" prompt as an inline action.' },
             { id: 'rename-device',    title: 'Rename device', risk: 'warn', showInTypes: ['S','ST','T'], optional: true,
               requiresInputs: [{ name: 'value', label: 'Suffix (after "Oolio-")', placeholder: 'POS1', prefix: 'Oolio-' }],
@@ -97,7 +110,8 @@ const MODULES = [
             { id: 'install-pos-chrome', title: 'Create Oolio POS shortcut (Chrome kiosk)', risk: 'safe', showInTypes: ['ST'], note: 'Public-desktop shortcut launching pos.oolio.io fullscreen.', showWhen: m => m.deploymentMode === 'chrome' },
             { id: 'install-cds-chrome', title: 'Create Oolio CDS shortcut (Chrome kiosk)', risk: 'safe', showInTypes: ['ST'], note: 'Public-desktop shortcut launching cds.oolio.io on the second display.', showWhen: m => m.deploymentMode === 'chrome' && m.hasCDS === true },
             { id: 'set-startup',        title: 'Configure startup',          risk: 'warn', showInTypes: ['ST'], note: 'Copies the Oolio desktop shortcut(s) into shell:startup so the kiosk launches when the autologon user signs in. Also tidies up legacy HKCU Run entries from older toolkit builds.' },
-            { id: 'final-restart',      title: 'Schedule final restart',     risk: 'danger', showInTypes: ['ST'], note: 'Schedules a 30-second restart so the device rename, wallpaper, and autologon changes take effect. Run "shutdown /a" from a command prompt to cancel.' }
+            { id: 'final-restart',      title: 'Schedule final restart',     risk: 'danger', showInTypes: ['ST'], note: 'Schedules a 30-second restart so the device rename, wallpaper, and autologon changes take effect. Run "shutdown /a" from a command prompt to cancel.',
+              preview: ['Runs: shutdown /r /t 30. The terminal restarts in 30 seconds.', 'No data is destroyed - this only reboots so device-rename, wallpaper, and autologon take effect.', 'Cancel with: shutdown /a (from any command prompt within 30 seconds).'] }
         ]
     }
 ];
@@ -111,6 +125,7 @@ let state = {
     expandedSteps: {},
     runningStep: null,
     outputLog: {},
+    outputFilter: {},
     inputValues: {},
     confirmTicked: {},
     // Latest progress event per step. Updated 1x/sec while a download or install
@@ -143,6 +158,13 @@ window.addEventListener('DOMContentLoaded', async () => {
 });
 
 // ---------- Helpers ----------
+
+// Per-session CSRF token. Injected into <meta name="oolio-token"> by the server.
+// Required on POST /progress (header) and GET /run (query string).
+function getCsrfToken() {
+    const m = document.querySelector('meta[name="oolio-token"]');
+    return (m && m.getAttribute('content')) || '';
+}
 
 function getMeta() { return state.progress.meta || {}; }
 
@@ -202,7 +224,10 @@ async function saveProgress() {
     try {
         await fetch('/progress', {
             method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
+            headers: {
+                'Content-Type': 'application/json',
+                'X-Oolio-Token': getCsrfToken()
+            },
             body: JSON.stringify(state.progress)
         });
     } catch (e) {
@@ -266,6 +291,9 @@ function getStepExtras(stepId) {
     if (stepId === 'active-hours') {
         // Default to 3 (3am) when the tech leaves the field blank.
         return { value: state.inputValues['windows.active-hours.value'] || '3' };
+    }
+    if (stepId === 'locale-time') {
+        return { value: state.inputValues['windows.locale-time.value'] || 'AUS Eastern Standard Time' };
     }
     return {};
 }
@@ -435,7 +463,7 @@ function runStep(moduleId, stepId, extras) {
     if (typeof extras === 'string') params.value = extras;
     else if (extras && typeof extras === 'object') params = extras;
 
-    let url = `/run?module=${encodeURIComponent(moduleId)}&step=${encodeURIComponent(stepId)}`;
+    let url = `/run?module=${encodeURIComponent(moduleId)}&step=${encodeURIComponent(stepId)}&t=${encodeURIComponent(getCsrfToken())}`;
     Object.keys(params).forEach(k => {
         if (params[k] !== undefined && params[k] !== null && params[k] !== '') {
             url += `&${encodeURIComponent(k)}=${encodeURIComponent(params[k])}`;
@@ -893,14 +921,23 @@ function renderOutputLog(moduleId, stepId) {
     const key = moduleId + '.' + stepId;
     const lines = state.outputLog[key];
     if (!lines || lines.length === 0) return '';
-    const html = lines.map(line => {
+    const errorsOnly = state.outputFilter && state.outputFilter[key] === 'errors';
+    const errorCount = lines.filter(l => l.includes('[ERROR]') || l.startsWith('__ERROR__')).length;
+    const visibleLines = errorsOnly ? lines.filter(l => l.includes('[ERROR]') || l.startsWith('__ERROR__')) : lines;
+    const html = visibleLines.map(line => {
         let cls = '';
         if (line.includes('[OK]')) cls = 'ok';
         else if (line.includes('[WARN]')) cls = 'warn';
         else if (line.includes('[ERROR]') || line.startsWith('__ERROR__')) cls = 'error';
         return `<span class="output-line ${cls}">${escapeHtml(line)}</span>`;
     }).join('\n');
-    return `<div id="output-${moduleId}-${stepId}" class="output-log">${html}</div>`;
+    return `
+      <div class="output-toolbar">
+        <span class="output-stats">${lines.length} line${lines.length === 1 ? '' : 's'}${errorCount > 0 ? ` · <span class="output-stats-err">${errorCount} error${errorCount === 1 ? '' : 's'}</span>` : ''}</span>
+        <button class="btn-ghost btn-tiny" data-action="output-copy" data-key="${key}">Copy</button>
+        <button class="btn-ghost btn-tiny" data-action="output-filter" data-key="${key}">${errorsOnly ? 'Show all' : 'Errors only'}</button>
+      </div>
+      <div id="output-${moduleId}-${stepId}" class="output-log" data-errors-only="${errorsOnly ? '1' : '0'}">${html}</div>`;
 }
 
 function renderConfigStep() {
@@ -985,8 +1022,14 @@ function renderStep(moduleDef, step, index) {
                 }).join('')}
               </div>` : '';
 
+            const previewHtml = (isDanger && step.preview && step.preview.length > 0) ? `
+              <div class="step-danger-preview">
+                <div class="step-danger-preview-title">What will change:</div>
+                <ul>${step.preview.map(p => `<li>${escapeHtml(p)}</li>`).join('')}</ul>
+              </div>` : '';
             const dangerWarning = isDanger ? `
               <div class="step-danger-warning">This action is destructive and cannot be undone. Make sure the data backup is complete.</div>
+              ${previewHtml}
               <label class="step-confirm">
                 <input type="checkbox" data-step-confirm="${key}" ${confirmed ? 'checked' : ''}>
                 I confirm this action is intentional and the data backup is complete.
@@ -1005,6 +1048,7 @@ function renderStep(moduleDef, step, index) {
                   ${renderOutputLog(moduleDef.id, step.id)}
                   <div class="step-actions">
                     ${showRun ? `<button class="btn-primary" data-action="run" data-key="${key}" ${runDisabled ? 'disabled' : ''}>${isRunning ? 'Running…' : 'Run'}</button>` : ''}
+                    ${status === 'error' ? `<button class="btn-primary" data-action="retry" data-key="${key}" ${isRunning ? 'disabled' : ''}>Retry</button>` : ''}
                     <button class="btn-secondary" data-action="mark-done" data-key="${key}" ${isRunning ? 'disabled' : ''}>Mark done</button>
                     <button class="btn-ghost" data-action="skip" data-key="${key}" ${isRunning ? 'disabled' : ''}>Skip</button>
                     ${status !== 'pending' ? `<button class="btn-ghost" data-action="reset" data-key="${key}" ${isRunning ? 'disabled' : ''}>Reset</button>` : ''}
@@ -1227,6 +1271,34 @@ function attachModuleHandlers() {
             } else if (action === 'reset') {
                 setStepStatus(moduleId, stepId, 'pending');
                 state.outputLog[key] = [];
+                render();
+            } else if (action === 'retry') {
+                state.outputLog[key] = [];
+                setStepStatus(moduleId, stepId, 'pending');
+                render();
+                runStep(moduleId, stepId, getStepExtras(stepId));
+            } else if (action === 'output-copy') {
+                const lines = state.outputLog[key] || [];
+                const text = lines.join('\n');
+                if (navigator.clipboard && navigator.clipboard.writeText) {
+                    navigator.clipboard.writeText(text).then(() => {
+                        btn.textContent = 'Copied';
+                        setTimeout(() => { btn.textContent = 'Copy'; }, 1200);
+                    });
+                } else {
+                    // Fallback for older browsers
+                    const ta = document.createElement('textarea');
+                    ta.value = text;
+                    document.body.appendChild(ta);
+                    ta.select();
+                    try { document.execCommand('copy'); } catch (e) {}
+                    document.body.removeChild(ta);
+                    btn.textContent = 'Copied';
+                    setTimeout(() => { btn.textContent = 'Copy'; }, 1200);
+                }
+            } else if (action === 'output-filter') {
+                state.outputFilter = state.outputFilter || {};
+                state.outputFilter[key] = state.outputFilter[key] === 'errors' ? 'all' : 'errors';
                 render();
             }
         });

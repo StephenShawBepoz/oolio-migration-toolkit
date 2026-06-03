@@ -52,18 +52,34 @@ function Invoke-OolioInstallCDSChrome {
         return
     }
 
+    # Detect the primary display's actual right edge so the CDS window lands on
+    # display #2 regardless of resolution. Falls back to 1920 if WinForms can't
+    # load (rare on a POS terminal but possible on Server Core).
+    $offsetX = 1920
+    try {
+        Add-Type -AssemblyName System.Windows.Forms -ErrorAction Stop
+        $primary = [System.Windows.Forms.Screen]::PrimaryScreen.Bounds
+        $offsetX = $primary.X + $primary.Width
+        Write-Log "Primary display: $($primary.Width) x $($primary.Height). Second display origin assumed at X=$offsetX." "OK"
+        $screens = [System.Windows.Forms.Screen]::AllScreens
+        Write-Log "Detected $($screens.Count) display(s)."
+        if ($screens.Count -lt 2) {
+            Write-Log "Only one display detected. CDS shortcut will still be created but will appear off-screen until a second display is connected." "WARN"
+        }
+    } catch {
+        Write-Log "Could not query display layout - defaulting to X=$offsetX. $($_.Exception.Message)" "WARN"
+    }
+
     $shortcutPath = "C:\Users\Public\Desktop\Oolio CDS.lnk"
     $shell    = New-Object -ComObject WScript.Shell
     $shortcut = $shell.CreateShortcut($shortcutPath)
     $shortcut.TargetPath  = $chromePath
-    # --window-position=1920,0 places it on the second display assuming 1920px primary
-    $shortcut.Arguments   = "--kiosk https://cds.oolio.io --no-first-run --disable-infobars --window-position=1920,0"
+    $shortcut.Arguments   = "--kiosk https://cds.oolio.io --no-first-run --disable-infobars --window-position=$offsetX,0"
     $shortcut.WindowStyle = 3
     $shortcut.Save()
 
     Write-Log "Shortcut created: $shortcutPath" "OK"
-    Write-Log "Launches cds.oolio.io fullscreen on second display (assumes 1920px primary)." "WARN"
-    Write-Log "If primary display is not 1920px wide, update the --window-position X value in the shortcut manually."
+    Write-Log "Launches cds.oolio.io fullscreen on the display at X=$offsetX."
 }
 
 function Invoke-OolioSetStartup {

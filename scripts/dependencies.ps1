@@ -25,7 +25,7 @@ function Invoke-DepsCheckChrome {
     $msiPath = Join-Path $env:TEMP "googlechromestandaloneenterprise64.msi"
 
     Write-Log "Source: $msiUrl"
-    if (-not (Invoke-DownloadWithHeartbeat -Url $msiUrl -OutFile $msiPath -ProgressLabel "Downloading Google Chrome")) {
+    if (-not (Invoke-DownloadWithRetry -Url $msiUrl -OutFile $msiPath -ProgressLabel "Downloading Google Chrome")) {
         Write-Log "The terminal needs internet at this point. Re-run when connectivity is available." "WARN"
         return
     }
@@ -78,7 +78,7 @@ function Invoke-DepsInstallTeamViewer {
     $installer = Join-Path $env:TEMP "TeamViewer_Setup_x64.exe"
 
     Write-Log "Source: $url"
-    if (-not (Invoke-DownloadWithHeartbeat -Url $url -OutFile $installer -ProgressLabel "Downloading TeamViewer")) {
+    if (-not (Invoke-DownloadWithRetry -Url $url -OutFile $installer -ProgressLabel "Downloading TeamViewer")) {
         Write-Log "The terminal needs internet at this point. Re-run when connectivity is available." "WARN"
         return
     }
@@ -132,7 +132,7 @@ function Invoke-DepsCheckWebView2 {
     $installer = Join-Path $env:TEMP "MicrosoftEdgeWebview2Setup.exe"
 
     Write-Log "Source: $url"
-    if (-not (Invoke-DownloadWithHeartbeat -Url $url -OutFile $installer -ProgressLabel "Downloading Edge WebView2")) {
+    if (-not (Invoke-DownloadWithRetry -Url $url -OutFile $installer -ProgressLabel "Downloading Edge WebView2")) {
         Write-Log "The terminal needs internet at this point. Re-run when connectivity is available." "WARN"
         return
     }

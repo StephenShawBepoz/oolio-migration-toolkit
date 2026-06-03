@@ -45,6 +45,134 @@ function Write-ProgressEvent {
     Write-Output "__PROGRESS__: $payload"
 }
 
+# Find installed programs by registry scan. Returns objects with DisplayName,
+# DisplayVersion, UninstallString, QuietUninstallString, Publisher, and the
+# source registry path. Avoids Win32_Product (which triggers an MSI
+# reconfigure on every installed package). The match is a -like wildcard so
+# callers can pass "*Bepoz*", "TeamViewer", etc.
+function Get-InstalledProgram {
+    param([Parameter(Mandatory)] [string]$NameLike)
+    $roots = @(
+        "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall",
+        "HKLM:\SOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall",
+        "HKCU:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall"
+    )
+    $results = @()
+    foreach ($root in $roots) {
+        if (-not (Test-Path $root)) { continue }
+        Get-ChildItem -Path $root -ErrorAction SilentlyContinue | ForEach-Object {
+            $p = Get-ItemProperty -Path $_.PSPath -ErrorAction SilentlyContinue
+            if ($p -and $p.DisplayName -and ($p.DisplayName -like $NameLike)) {
+                $results += [pscustomobject]@{
+                    DisplayName          = $p.DisplayName
+                    DisplayVersion       = $p.DisplayVersion
+                    Publisher            = $p.Publisher
+                    UninstallString      = $p.UninstallString
+                    QuietUninstallString = $p.QuietUninstallString
+                    RegistryPath         = $_.PSPath
+                }
+            }
+        }
+    }
+    return $results
+}
+
+# Write a registry value into every local user's HKCU hive plus the .DEFAULT
+# template (so new profiles inherit it too). Use for POS-hardening tweaks that
+# need to apply to the autologon POS user even when the toolkit ran under a
+# different admin account. Loaded hives are always unloaded (even on failure)
+# so the registry stays clean.
+function Set-RegistryForAllUsers {
+    param(
+        [Parameter(Mandatory)] [string]$SubKey,    # e.g. "SOFTWARE\Microsoft\TabletTip\1.7"
+        [Parameter(Mandatory)] [string]$Name,
+        [Parameter(Mandatory)] $Value,
+        [ValidateSet('DWord','String','ExpandString','MultiString','Binary','QWord')]
+        [string]$Type = 'DWord'
+    )
+
+    # Always start with the default user template - new profiles will inherit.
+    $targets = @(
+        @{ Hive = "HKLM\.DEFAULT"; LoadPath = $null; Label = ".DEFAULT" }
+    )
+
+    # Loaded hives appear under HKEY_USERS\<SID>. Walk every profile in
+    # ProfileList, skipping system accounts and already-loaded ones.
+    $profileListKey = "HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\ProfileList"
+    $loadedSids = @{}
+    Get-ChildItem "Registry::HKEY_USERS" -ErrorAction SilentlyContinue | ForEach-Object {
+        $loadedSids[$_.PSChildName] = $true
+    }
+
+    Get-ChildItem $profileListKey -ErrorAction SilentlyContinue | ForEach-Object {
+        $sid = $_.PSChildName
+        if ($sid -like "S-1-5-18*" -or $sid -like "S-1-5-19*" -or $sid -like "S-1-5-20*") { return }
+        if ($sid.EndsWith("_Classes")) { return }
+        $profilePath = (Get-ItemProperty -Path $_.PSPath -Name "ProfileImagePath" -ErrorAction SilentlyContinue).ProfileImagePath
+        if (-not $profilePath) { return }
+        if ($loadedSids.ContainsKey($sid)) {
+            $targets += @{ Hive = "HKU\$sid"; LoadPath = $null; Label = "$sid (loaded)" }
+        } else {
+            $ntuser = Join-Path $profilePath "NTUSER.DAT"
+            if (Test-Path $ntuser) {
+                $targets += @{ Hive = "HKU\Oolio_$sid"; LoadPath = $ntuser; Label = "$sid (loading from $ntuser)" }
+            }
+        }
+    }
+
+    foreach ($t in $targets) {
+        $loaded = $false
+        try {
+            if ($t.LoadPath) {
+                $hiveName = $t.Hive.Replace("HKU\", "")
+                $null = reg.exe load $t.Hive "`"$($t.LoadPath)`"" 2>&1
+                if ($LASTEXITCODE -ne 0) {
+                    Write-Log "  Skip $($t.Label) - reg load failed (file in use?)" "WARN"
+                    continue
+                }
+                $loaded = $true
+            }
+            $regPath = $t.Hive.Replace("HKU\", "Registry::HKEY_USERS\").Replace("HKLM\", "Registry::HKEY_LOCAL_MACHINE\") + "\$SubKey"
+            if (-not (Test-Path $regPath)) {
+                New-Item -Path $regPath -Force | Out-Null
+            }
+            New-ItemProperty -Path $regPath -Name $Name -Value $Value -PropertyType $Type -Force | Out-Null
+            Write-Log "  $($t.Label) :: $SubKey\$Name = $Value" "OK"
+        } catch {
+            Write-Log "  $($t.Label) :: failed - $($_.Exception.Message)" "WARN"
+        } finally {
+            if ($loaded) {
+                [gc]::Collect()
+                Start-Sleep -Milliseconds 200
+                $null = reg.exe unload $t.Hive 2>&1
+            }
+        }
+    }
+}
+
+# Retry wrapper around Invoke-DownloadWithHeartbeat. Three attempts with
+# exponential backoff (2s, 4s, 8s). Logs each retry so techs see what's
+# happening. Returns the boolean result of the final attempt.
+function Invoke-DownloadWithRetry {
+    param(
+        [string]$Url,
+        [string]$OutFile,
+        [string]$ProgressLabel = "Downloading",
+        [int]$MaxAttempts = 3
+    )
+    for ($attempt = 1; $attempt -le $MaxAttempts; $attempt++) {
+        if ($attempt -gt 1) {
+            $backoff = [int][math]::Pow(2, $attempt - 1)
+            Write-Log "Retry $($attempt-1) failed. Waiting ${backoff}s before next attempt..." "WARN"
+            Start-Sleep -Seconds $backoff
+        }
+        $ok = Invoke-DownloadWithHeartbeat -Url $Url -OutFile $OutFile -ProgressLabel "$ProgressLabel (attempt $attempt/$MaxAttempts)"
+        if ($ok) { return $true }
+    }
+    Write-Log "All $MaxAttempts download attempts failed." "ERROR"
+    return $false
+}
+
 # Download a file with a heartbeat. Pre-flights a HEAD request to learn the
 # total size for a determinate progress bar; falls back to indeterminate if
 # Content-Length is unavailable. Emits two cadences:
