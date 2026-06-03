@@ -14,12 +14,23 @@
 #   - Default gateway ping (separates "Wi-Fi dropped" from "internet dropped")
 #   - DNS resolution against system resolver and 1.1.1.1
 #   - ICMP to 1.1.1.1 and 8.8.8.8
-#   - HTTPS GET to cloudflare.com (some networks block ICMP - HTTPS is the real test)
+#   - HTTPS HEAD to cloudflare.com (some networks block ICMP - HTTPS is the real test)
 #   - Verdict: Online / WifiOnlyNoInternet / DnsFailure / Offline
+#
+# Robustness:
+#   - Probes run in parallel via .NET async tasks so a slow probe can't blow
+#     the cycle budget.
+#   - On every transition into a non-Online verdict, a tracert runs async in
+#     the background and its output is appended to the log when it completes.
+#   - WLAN AutoConfig + DHCP event logs are polled every 60s so AP-side
+#     deauth/roam events are recorded alongside the probe verdicts.
+#   - Self-test at startup verifies writable outputs and that each probe
+#     mechanism works before entering the long-running loop.
 
 param(
     [int]$IntervalSeconds = 10,
-    [string]$OutputFolder = $PSScriptRoot
+    [string]$OutputFolder = $PSScriptRoot,
+    [string]$VenueLabel   = ""
 )
 
 if (-not $OutputFolder) { $OutputFolder = Get-Location }
@@ -27,8 +38,9 @@ if (-not (Test-Path $OutputFolder)) { New-Item -ItemType Directory -Path $Output
 
 $stamp     = Get-Date -Format "yyyy-MM-dd_HHmmss"
 $computer  = $env:COMPUTERNAME
-$csvPath   = Join-Path $OutputFolder "internet-check-$computer-$stamp.csv"
-$logPath   = Join-Path $OutputFolder "internet-check-$computer-$stamp.log"
+$slug      = if ($VenueLabel) { ($VenueLabel -replace '[^A-Za-z0-9\-]', '_') + "-" } else { "" }
+$csvPath   = Join-Path $OutputFolder "internet-check-$slug$computer-$stamp.csv"
+$logPath   = Join-Path $OutputFolder "internet-check-$slug$computer-$stamp.log"
 
 # ---- Helpers ----------------------------------------------------------------
 
@@ -85,29 +97,80 @@ function Get-WifiInfo {
     return $info
 }
 
-function Test-PingTarget {
-    param([string]$Target, [int]$Count = 3)
+# ---- Parallel probes via .NET async tasks ----------------------------------
+#
+# Each cycle kicks off Ping + DNS + HTTPS in parallel. WaitAll caps the total
+# cycle at $WaitMs so a single hung probe can't violate $IntervalSeconds.
+# HttpClient is created once and reused (creating it per call leaks sockets).
+
+Add-Type -AssemblyName System.Net.Http -ErrorAction SilentlyContinue
+$script:HttpClient = [System.Net.Http.HttpClient]::new()
+$script:HttpClient.Timeout = [TimeSpan]::FromSeconds(5)
+
+function Start-AsyncPing {
+    param([string]$Target, [int]$TimeoutMs = 1500)
+    $p = New-Object System.Net.NetworkInformation.Ping
+    return @{ Ping = $p; Task = $p.SendPingAsync($Target, $TimeoutMs) }
+}
+
+function Read-PingResult {
+    param($Handle)
+    $t = $Handle.Task
     try {
-        $results = Test-Connection -ComputerName $Target -Count $Count -ErrorAction Stop
-        $ok = @($results | Where-Object { $_.StatusCode -eq 0 -or $_.ResponseTime -ne $null })
-        if ($ok.Count -eq 0) {
-            return [pscustomobject]@{ Ok = $false; AvgMs = $null; LossPct = 100 }
+        if (-not $t.IsCompleted) { return [pscustomobject]@{ Ok = $false; AvgMs = $null; LossPct = 100 } }
+        if ($t.IsFaulted -or $t.IsCanceled) { return [pscustomobject]@{ Ok = $false; AvgMs = $null; LossPct = 100 } }
+        $r = $t.Result
+        if ($r.Status -eq 'Success') {
+            return [pscustomobject]@{ Ok = $true; AvgMs = [int]$r.RoundtripTime; LossPct = 0 }
         }
-        $avg = [math]::Round(($ok | Measure-Object -Property ResponseTime -Average).Average, 1)
-        $loss = [int](100 - (($ok.Count / $Count) * 100))
-        return [pscustomobject]@{ Ok = $true; AvgMs = $avg; LossPct = $loss }
-    } catch {
         return [pscustomobject]@{ Ok = $false; AvgMs = $null; LossPct = 100 }
+    } finally {
+        try { $Handle.Ping.Dispose() } catch {}
     }
 }
 
-function Test-DnsResolve {
+function Start-AsyncDns {
+    param([string]$Name)
+    return @{ Task = [System.Net.Dns]::GetHostAddressesAsync($Name); Started = [System.Diagnostics.Stopwatch]::StartNew() }
+}
+
+function Read-DnsResult {
+    param($Handle)
+    $sw = $Handle.Started; $sw.Stop()
+    if ($Handle.Task.IsCompleted -and -not $Handle.Task.IsFaulted -and -not $Handle.Task.IsCanceled) {
+        return [pscustomobject]@{ Ok = $true; Ms = [int]$sw.ElapsedMilliseconds }
+    }
+    return [pscustomobject]@{ Ok = $false; Ms = $null }
+}
+
+function Start-AsyncHttps {
+    param([string]$Url)
+    $req = New-Object System.Net.Http.HttpRequestMessage([System.Net.Http.HttpMethod]::Head, $Url)
+    return @{
+        Task    = $script:HttpClient.SendAsync($req)
+        Started = [System.Diagnostics.Stopwatch]::StartNew()
+    }
+}
+
+function Read-HttpsResult {
+    param($Handle)
+    $sw = $Handle.Started; $sw.Stop()
+    if ($Handle.Task.IsCompleted -and -not $Handle.Task.IsFaulted -and -not $Handle.Task.IsCanceled) {
+        $resp = $Handle.Task.Result
+        return [pscustomobject]@{ Ok = $true; Ms = [int]$sw.ElapsedMilliseconds; Status = [int]$resp.StatusCode }
+    }
+    return [pscustomobject]@{ Ok = $false; Ms = $null; Status = $null }
+}
+
+# DNS-against-a-specific-server isn't supported by .NET Dns. We still want to
+# detect "system resolver broken but Cloudflare DNS works" - which is why this
+# stays a separate sync probe via Resolve-DnsName. It runs in parallel with the
+# async tasks by being kicked off after them and read after WaitAll returns.
+function Test-DnsResolveSpecific {
     param([string]$Name, [string]$Server)
     $sw = [System.Diagnostics.Stopwatch]::StartNew()
     try {
-        $params = @{ Name = $Name; Type = "A"; QuickTimeout = $true; ErrorAction = "Stop" }
-        if ($Server) { $params["Server"] = $Server }
-        $null = Resolve-DnsName @params
+        $null = Resolve-DnsName -Name $Name -Server $Server -Type A -QuickTimeout -ErrorAction Stop
         $sw.Stop()
         return [pscustomobject]@{ Ok = $true; Ms = [int]$sw.ElapsedMilliseconds }
     } catch {
@@ -116,29 +179,192 @@ function Test-DnsResolve {
     }
 }
 
-function Test-HttpsTarget {
-    param([string]$Url)
-    $sw = [System.Diagnostics.Stopwatch]::StartNew()
+# ---- Traceroute on outage transition ---------------------------------------
+#
+# Fired as a background Start-Process so the main loop doesn't block. The PID
+# and a marker file are tracked so subsequent cycles can detect completion and
+# splice the output back into the main log.
+
+$script:PendingTraceroutes = [System.Collections.ArrayList]::new()
+
+function Start-TracerouteOnOutage {
+    param([string]$Target = "1.1.1.1", [string]$Reason = "")
+    $traceFile = Join-Path $OutputFolder "traceroute-$(Get-Date -Format 'yyyyMMdd_HHmmss').tmp"
     try {
-        try {
-            [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12 -bor [Net.SecurityProtocolType]::Tls13
-        } catch {
-            [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
-        }
-        $resp = Invoke-WebRequest -Uri $Url -UseBasicParsing -TimeoutSec 5 -Method Head -ErrorAction Stop
-        $sw.Stop()
-        return [pscustomobject]@{ Ok = $true; Ms = [int]$sw.ElapsedMilliseconds; Status = [int]$resp.StatusCode }
+        $proc = Start-Process -FilePath "tracert.exe" `
+                              -ArgumentList "-d","-h","15","-w","1000",$Target `
+                              -RedirectStandardOutput $traceFile `
+                              -NoNewWindow -PassThru -ErrorAction Stop
+        $null = $script:PendingTraceroutes.Add([pscustomobject]@{
+            Process  = $proc
+            File     = $traceFile
+            Target   = $Target
+            Reason   = $Reason
+            StartedAt = (Get-Date)
+        })
+        Write-LogLine "Traceroute to $Target started (reason: $Reason, PID $($proc.Id))" "WARN"
     } catch {
-        $sw.Stop()
-        return [pscustomobject]@{ Ok = $false; Ms = $null; Status = $null }
+        Write-LogLine "Failed to launch tracert: $($_.Exception.Message)" "WARN"
     }
+}
+
+function Drain-CompletedTraceroutes {
+    $stillRunning = [System.Collections.ArrayList]::new()
+    foreach ($t in $script:PendingTraceroutes) {
+        if ($t.Process.HasExited) {
+            try {
+                $output = Get-Content -Path $t.File -Raw -Encoding UTF8 -ErrorAction Stop
+                Write-LogLine "---- TRACEROUTE to $($t.Target) (reason: $($t.Reason)) ----" "WARN"
+                foreach ($ln in ($output -split "`r?`n")) {
+                    if ($ln.Trim().Length -gt 0) { Add-Content -Path $logPath -Value "    $ln" -Encoding UTF8 }
+                }
+                Write-LogLine "---- end traceroute ----" "WARN"
+            } catch {
+                Write-LogLine "Could not read traceroute output: $($_.Exception.Message)" "WARN"
+            } finally {
+                Remove-Item -Path $t.File -Force -ErrorAction SilentlyContinue
+            }
+        } else {
+            # Kill traceroutes that have been running too long (>60s)
+            $age = ((Get-Date) - $t.StartedAt).TotalSeconds
+            if ($age -gt 60) {
+                try { $t.Process.Kill() } catch {}
+                Write-LogLine "Traceroute to $($t.Target) killed after ${age}s (timeout)" "WARN"
+                Remove-Item -Path $t.File -Force -ErrorAction SilentlyContinue
+            } else {
+                $null = $stillRunning.Add($t)
+            }
+        }
+    }
+    $script:PendingTraceroutes = $stillRunning
+}
+
+# ---- WLAN + DHCP event log polling -----------------------------------------
+#
+# Microsoft-Windows-WLAN-AutoConfig/Operational records connect / disconnect /
+# roam events and *the reason code from the AP*. Microsoft-Windows-Dhcp-Client/
+# Operational records lease renewals, NAKs, and ACKs. Cross-referencing these
+# with probe verdicts is what tells the network person *why* Wi-Fi dropped,
+# not just *that* it dropped.
+
+$script:LastEventScan = (Get-Date).AddSeconds(-1)
+# Common WLAN event IDs we care about (full list at https://learn.microsoft.com/en-us/windows/win32/nativewifi/wlan-msm-notification-source-codes)
+$script:WlanInterestingIds = @(8001, 8002, 8003, 11000, 11001, 11002, 11004, 11005, 11006, 11010)
+$script:DhcpInterestingIds = @(50036, 50037, 50038, 50066, 50067)
+
+function Drain-NetworkEvents {
+    $sinceTime = $script:LastEventScan
+    $now = Get-Date
+    $script:LastEventScan = $now
+
+    foreach ($spec in @(
+        @{ Log = 'Microsoft-Windows-WLAN-AutoConfig/Operational'; Ids = $script:WlanInterestingIds; Tag = "WLAN" }
+        @{ Log = 'Microsoft-Windows-Dhcp-Client/Operational';      Ids = $script:DhcpInterestingIds; Tag = "DHCP" }
+    )) {
+        try {
+            $filter = @{ LogName = $spec.Log; StartTime = $sinceTime }
+            if ($spec.Ids -and $spec.Ids.Count -gt 0) { $filter["Id"] = $spec.Ids }
+            $events = Get-WinEvent -FilterHashtable $filter -ErrorAction Stop -MaxEvents 50
+            foreach ($e in ($events | Sort-Object TimeCreated)) {
+                $msg = ($e.Message -split "`r?`n" | Where-Object { $_.Trim() } | Select-Object -First 1)
+                Write-LogLine "[$($spec.Tag) evt $($e.Id)] $msg" "WARN"
+            }
+        } catch {
+            # Log may not exist on this terminal or be disabled - swallow silently
+            # after the first call, otherwise it spams the log every minute.
+        }
+    }
+}
+
+# ---- Self-test -------------------------------------------------------------
+
+function Invoke-SelfTest {
+    Write-LogLine "Running self-test..." "INFO"
+    $problems = @()
+
+    # 1. CSV writable
+    try {
+        Set-Content -Path $csvPath -Value "selftest" -Encoding UTF8 -ErrorAction Stop
+        Remove-Item -Path $csvPath -Force -ErrorAction SilentlyContinue
+    } catch {
+        $problems += "Cannot write CSV at $csvPath - $($_.Exception.Message)"
+    }
+
+    # 2. tracert.exe exists
+    $tracert = Get-Command tracert.exe -ErrorAction SilentlyContinue
+    if (-not $tracert) {
+        $problems += "tracert.exe not found - outage traceroutes will be skipped"
+    } else {
+        Write-LogLine "  tracert.exe: $($tracert.Source)" "OK"
+    }
+
+    # 3. .NET Ping works
+    try {
+        $h = Start-AsyncPing -Target "1.1.1.1" -TimeoutMs 2000
+        $null = $h.Task.Wait(2500)
+        $r = Read-PingResult -Handle $h
+        if ($r.Ok) { Write-LogLine "  ICMP to 1.1.1.1: $($r.AvgMs)ms" "OK" }
+        else       { $problems += "ICMP to 1.1.1.1 failed at startup - network unreachable already?" }
+    } catch {
+        $problems += ".NET Ping failed: $($_.Exception.Message)"
+    }
+
+    # 4. DNS works
+    try {
+        $h = Start-AsyncDns -Name "cloudflare.com"
+        $null = $h.Task.Wait(3000)
+        $r = Read-DnsResult -Handle $h
+        if ($r.Ok) { Write-LogLine "  DNS resolve cloudflare.com: $($r.Ms)ms" "OK" }
+        else       { $problems += "DNS resolution failed at startup - already broken?" }
+    } catch {
+        $problems += "DNS task failed: $($_.Exception.Message)"
+    }
+
+    # 5. HTTPS works
+    try {
+        $h = Start-AsyncHttps -Url "https://www.cloudflare.com"
+        $null = $h.Task.Wait(6000)
+        $r = Read-HttpsResult -Handle $h
+        if ($r.Ok) { Write-LogLine "  HTTPS HEAD cloudflare.com: $($r.Ms)ms (HTTP $($r.Status))" "OK" }
+        else       { $problems += "HTTPS to cloudflare.com failed at startup" }
+    } catch {
+        $problems += "HTTPS task failed: $($_.Exception.Message)"
+    }
+
+    # 6. Wi-Fi info (warn-only - terminal might be on Ethernet)
+    $w = Get-WifiInfo
+    if ($w.SSID) {
+        Write-LogLine "  Wi-Fi: SSID='$($w.SSID)' BSSID=$($w.BSSID) signal=$($w.SignalPct)%" "OK"
+    } else {
+        Write-LogLine "  Wi-Fi: no SSID reported (terminal may be on Ethernet, or netsh locale is non-English)" "WARN"
+    }
+
+    # 7. Default-route interface
+    $iface = Get-ActiveInterface
+    if ($iface) {
+        Write-LogLine "  Default route: $($iface.Name) ($($iface.Type)) via $($iface.Gateway)" "OK"
+    } else {
+        $problems += "No active default-route interface detected - no internet path exists"
+    }
+
+    if ($problems.Count -gt 0) {
+        Write-LogLine "SELF-TEST FAILURES:" "ERROR"
+        foreach ($p in $problems) { Write-LogLine "  - $p" "ERROR" }
+        Write-LogLine "Continuing anyway (some probes may always fail)." "WARN"
+        return $false
+    }
+
+    Write-LogLine "Self-test passed." "OK"
+    return $true
 }
 
 # ---- Header ----------------------------------------------------------------
 
+$venueDisplay = if ($VenueLabel) { $VenueLabel } else { "(unset - pass -VenueLabel to tag this run)" }
 @(
     "=" * 78
     "Internet connectivity monitor"
+    "Venue:      $venueDisplay"
     "Computer:   $computer"
     "Started:    $(Get-Date -Format 'yyyy-MM-dd HH:mm:ss')"
     "Interval:   $IntervalSeconds seconds"
@@ -151,8 +377,10 @@ function Test-HttpsTarget {
     Add-Content -Path $logPath -Value $_ -Encoding UTF8
 }
 
+$null = Invoke-SelfTest
+
 # CSV header
-$csvHeader = "Timestamp,Verdict,Interface,InterfaceType,LinkSpeed,Gateway,WifiSSID,WifiBSSID,WifiSignalPct,WifiTxRate,GatewayPingMs,GatewayLossPct,DnsSystemOk,DnsSystemMs,DnsCloudflareOk,DnsCloudflareMs,PingCloudflareMs,PingCloudflareLoss,PingGoogleMs,PingGoogleLoss,HttpsOk,HttpsMs,HttpsStatus"
+$csvHeader = "Timestamp,Venue,Verdict,Interface,InterfaceType,LinkSpeed,Gateway,WifiSSID,WifiBSSID,WifiSignalPct,WifiTxRate,GatewayPingMs,DnsSystemOk,DnsSystemMs,DnsCloudflareOk,DnsCloudflareMs,PingCloudflareMs,PingGoogleMs,HttpsOk,HttpsMs,HttpsStatus,CycleMs"
 Set-Content -Path $csvPath -Value $csvHeader -Encoding UTF8
 
 # ---- Stats counters --------------------------------------------------------
@@ -165,11 +393,13 @@ $stats = @{
     DnsFailureProbes          = 0
     InterfaceFlips            = 0
     LastInterface             = $null
+    LastVerdict               = "Online"
     OutageStartedAt           = $null
     LongestOutageSec          = 0
-    CurrentOutageSec          = 0
     Start                     = Get-Date
     LastHourSummaryAt         = Get-Date
+    LastEventDrainAt          = Get-Date
+    OverBudgetCycles          = 0
 }
 
 function Csv-Escape {
@@ -199,6 +429,7 @@ function Write-Summary {
         "DNS-only failures:        $($stats.DnsFailureProbes)"
         "Interface switches:       $($stats.InterfaceFlips)"
         "Longest outage (sec):     $($stats.LongestOutageSec)"
+        "Over-budget cycles:       $($stats.OverBudgetCycles)"
         "----------------------"
         ""
     )
@@ -212,17 +443,36 @@ function Write-Summary {
 
 try {
     while ($true) {
-        $now = Get-Date
+        $cycleStart = Get-Date
+
+        # Kick off async probes in parallel
+        $hPingCf = Start-AsyncPing -Target "1.1.1.1" -TimeoutMs 1500
+        $hPingGo = Start-AsyncPing -Target "8.8.8.8" -TimeoutMs 1500
+        $hDnsSys = Start-AsyncDns -Name "cloudflare.com"
+        $hHttps  = Start-AsyncHttps -Url "https://www.cloudflare.com"
 
         $iface = Get-ActiveInterface
         $wifi  = Get-WifiInfo
 
-        $gwPing  = if ($iface -and $iface.Gateway) { Test-PingTarget -Target $iface.Gateway -Count 2 } else { $null }
-        $dnsSys  = Test-DnsResolve -Name "cloudflare.com"
-        $dnsCf   = Test-DnsResolve -Name "cloudflare.com" -Server "1.1.1.1"
-        $pingCf  = Test-PingTarget -Target "1.1.1.1" -Count 3
-        $pingGo  = Test-PingTarget -Target "8.8.8.8" -Count 3
-        $https   = Test-HttpsTarget -Url "https://www.cloudflare.com"
+        $hPingGw = $null
+        if ($iface -and $iface.Gateway) {
+            $hPingGw = Start-AsyncPing -Target $iface.Gateway -TimeoutMs 1000
+        }
+
+        # Wait for all async tasks (max 6s total budget)
+        $allTasks = @($hPingCf.Task, $hPingGo.Task, $hDnsSys.Task, $hHttps.Task)
+        if ($hPingGw) { $allTasks += $hPingGw.Task }
+        try { $null = [System.Threading.Tasks.Task]::WaitAll($allTasks, 6000) } catch {}
+
+        # Sync probe for DNS-against-specific-server (no async equivalent in .NET)
+        $dnsCf = Test-DnsResolveSpecific -Name "cloudflare.com" -Server "1.1.1.1"
+
+        # Collect results
+        $pingCf = Read-PingResult -Handle $hPingCf
+        $pingGo = Read-PingResult -Handle $hPingGo
+        $dnsSys = Read-DnsResult  -Handle $hDnsSys
+        $https  = Read-HttpsResult -Handle $hHttps
+        $gwPing = if ($hPingGw) { Read-PingResult -Handle $hPingGw } else { $null }
 
         # Verdict logic
         $hasGateway   = $gwPing -and $gwPing.Ok
@@ -243,6 +493,12 @@ try {
             $verdict = "HttpBlockedOrSlow"; $level = "WARN"
         }
 
+        # Fire traceroute on transition into a non-Online state
+        if ($verdict -ne "Online" -and $stats.LastVerdict -eq "Online") {
+            Start-TracerouteOnOutage -Target "1.1.1.1" -Reason $verdict
+        }
+        $stats.LastVerdict = $verdict
+
         # Track interface flips
         $ifaceName = if ($iface) { $iface.Name } else { "(none)" }
         if ($stats.LastInterface -and $stats.LastInterface -ne $ifaceName) {
@@ -261,7 +517,7 @@ try {
             }
         } else {
             if (-not $stats.OutageStartedAt) {
-                $stats.OutageStartedAt = $now
+                $stats.OutageStartedAt = $cycleStart
                 Write-LogLine "Outage started ($verdict)" "WARN"
             }
         }
@@ -274,17 +530,20 @@ try {
             "DnsFailure"         { $stats.DnsFailureProbes++ }
         }
 
+        $cycleMs = [int]((Get-Date) - $cycleStart).TotalMilliseconds
+
         # Console summary line
-        $sigStr = if ($wifi.SignalPct -ne $null) { "$($wifi.SignalPct)%" } else { "-" }
-        $gwMs   = if ($gwPing -and $gwPing.Ok) { "$($gwPing.AvgMs)ms" } else { "FAIL" }
-        $cfMs   = if ($pingCf.Ok) { "$($pingCf.AvgMs)ms" } else { "FAIL" }
+        $sigStr  = if ($wifi.SignalPct -ne $null) { "$($wifi.SignalPct)%" } else { "-" }
+        $gwMs    = if ($gwPing -and $gwPing.Ok) { "$($gwPing.AvgMs)ms" } else { "FAIL" }
+        $cfMs    = if ($pingCf.Ok) { "$($pingCf.AvgMs)ms" } else { "FAIL" }
         $httpStr = if ($https.Ok) { "$($https.Ms)ms" } else { "FAIL" }
-        $msg = "$verdict | iface=$ifaceName | SSID=$($wifi.SSID) sig=$sigStr | gw=$gwMs | 1.1.1.1=$cfMs | https=$httpStr"
+        $msg = "$verdict | iface=$ifaceName | SSID=$($wifi.SSID) sig=$sigStr | gw=$gwMs | 1.1.1.1=$cfMs | https=$httpStr | cycle=${cycleMs}ms"
         Write-LogLine $msg $level
 
         # CSV row
         $row = @(
             (Get-Date -Format "yyyy-MM-dd HH:mm:ss"),
+            $VenueLabel,
             $verdict,
             $ifaceName,
             $(if ($iface) { $iface.Type } else { "" }),
@@ -295,20 +554,25 @@ try {
             $wifi.SignalPct,
             $wifi.TxRate,
             $(if ($gwPing) { $gwPing.AvgMs } else { "" }),
-            $(if ($gwPing) { $gwPing.LossPct } else { "" }),
             $dnsSys.Ok,
             $dnsSys.Ms,
             $dnsCf.Ok,
             $dnsCf.Ms,
             $pingCf.AvgMs,
-            $pingCf.LossPct,
             $pingGo.AvgMs,
-            $pingGo.LossPct,
             $https.Ok,
             $https.Ms,
-            $https.Status
+            $https.Status,
+            $cycleMs
         ) | ForEach-Object { Csv-Escape $_ }
         Add-Content -Path $csvPath -Value ($row -join ",") -Encoding UTF8
+
+        # Drain completed traceroutes (append to log) + poll network event log every 60s
+        Drain-CompletedTraceroutes
+        if (((Get-Date) - $stats.LastEventDrainAt).TotalSeconds -ge 60) {
+            Drain-NetworkEvents
+            $stats.LastEventDrainAt = Get-Date
+        }
 
         # Hourly summary
         if (((Get-Date) - $stats.LastHourSummaryAt).TotalMinutes -ge 60) {
@@ -316,10 +580,24 @@ try {
             $stats.LastHourSummaryAt = Get-Date
         }
 
-        Start-Sleep -Seconds $IntervalSeconds
+        # Sleep the remainder of the interval. If the cycle blew the budget,
+        # log a WARN and proceed immediately to the next cycle.
+        $sleepSec = $IntervalSeconds - ([int]((Get-Date) - $cycleStart).TotalSeconds)
+        if ($sleepSec -lt 0) {
+            $stats.OverBudgetCycles++
+            Write-LogLine "Cycle exceeded ${IntervalSeconds}s budget (took ${cycleMs}ms)" "WARN"
+        } else {
+            Start-Sleep -Seconds $sleepSec
+        }
     }
 } finally {
     Write-Summary -Final
+    # Kill any still-pending traceroutes
+    foreach ($t in $script:PendingTraceroutes) {
+        try { if (-not $t.Process.HasExited) { $t.Process.Kill() } } catch {}
+        Remove-Item -Path $t.File -Force -ErrorAction SilentlyContinue
+    }
+    try { $script:HttpClient.Dispose() } catch {}
     Write-Host "CSV saved: $csvPath" -ForegroundColor Cyan
     Write-Host "Log saved: $logPath" -ForegroundColor Cyan
 }

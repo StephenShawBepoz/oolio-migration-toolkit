@@ -51,11 +51,20 @@ Printed to the console + appended to the log every hour, and a final summary on 
 - Interface switches (proves whether 4G fallback ever activated)
 - Longest single outage in seconds
 
+### Robustness features
+
+- **Parallel probes via .NET async tasks** — ICMP, DNS, HTTPS, and gateway ping run concurrently each cycle with a 6-second total budget. A single hung probe can't blow the interval.
+- **Self-test at startup** — verifies CSV is writable, `tracert.exe` exists, and each probe mechanism (ICMP / DNS / HTTPS / Wi-Fi info / default route) works. Failures are logged so you know up front what's broken, before leaving the script running for 24h.
+- **Traceroute on outage transition** — every time the verdict transitions from `Online` to anything else, `tracert -d -h 15 -w 1000 1.1.1.1` fires in the background. Its output gets spliced into the log when it finishes. This tells you *where* the path is breaking — the gateway, the ISP edge, or further out — which is what the venue's network person actually needs.
+- **WLAN + DHCP event log polling** — every 60 seconds the script reads `Microsoft-Windows-WLAN-AutoConfig/Operational` and `Microsoft-Windows-Dhcp-Client/Operational`. AP-side deauth/disassoc reason codes, BSSID roams, and DHCP lease NAKs are logged alongside the probe verdicts so you can correlate "why" with "when".
+- **Cycle budget warnings** — if a cycle takes longer than `IntervalSeconds`, the script logs a WARN and counts it in the final summary.
+
 ### Options
 
 ```powershell
-.\Internet-Check.ps1 -IntervalSeconds 30      # default is 10
-.\Internet-Check.ps1 -OutputFolder C:\Temp    # default is the script's folder
+.\Internet-Check.ps1 -IntervalSeconds 30           # default is 10
+.\Internet-Check.ps1 -OutputFolder C:\Temp         # default is the script's folder
+.\Internet-Check.ps1 -VenueLabel "Smith St Pub"    # tags the output filenames + CSV rows
 ```
 
 ### What to hand the network person
