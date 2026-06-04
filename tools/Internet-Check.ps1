@@ -13,9 +13,15 @@
 #   - Wi-Fi SSID / BSSID / signal % / TX rate
 #   - Default gateway ping (separates "Wi-Fi dropped" from "internet dropped")
 #   - DNS resolution against system resolver and 1.1.1.1
-#   - ICMP to 1.1.1.1 and 8.8.8.8
-#   - HTTPS HEAD to cloudflare.com (some networks block ICMP - HTTPS is the real test)
-#   - Verdict: Online / WifiOnlyNoInternet / DnsFailure / Offline
+#   - ICMP burst (N pings) to 1.1.1.1 with loss% + single ping to 8.8.8.8
+#   - HTTPS HEAD to cloudflare.com (generic internet path)
+#   - HTTPS HEAD to the Oolio app endpoint (the connection the venue depends on)
+#   - Verdict: Online / WifiOnlyNoInternet / DnsFailure / HttpBlockedOrSlow /
+#              AppEndpointFailure / Offline
+#
+# Periodic summary every $SummaryEveryMin minutes (default 15) writes p50/p95/p99
+# latency rollups for ICMP / generic HTTPS / app HTTPS so brownouts are visible
+# even when uptime is 100%. The .log file rotates at $LogRotateMB (default 100).
 #
 # Robustness:
 #   - Probes run in parallel via .NET async tasks so a slow probe can't blow
@@ -28,9 +34,22 @@
 #     mechanism works before entering the long-running loop.
 
 param(
-    [int]$IntervalSeconds = 10,
-    [string]$OutputFolder = $PSScriptRoot,
-    [string]$VenueLabel   = ""
+    [int]$IntervalSeconds   = 10,
+    [string]$OutputFolder   = $PSScriptRoot,
+    [string]$VenueLabel     = "",
+    # Second HTTPS probe - the application endpoint the venue actually depends on.
+    # If cloudflare.com is fine but this fails repeatedly, the problem is the app
+    # backend, not the link. Set to "" to disable.
+    [string]$AppEndpoint    = "https://pos.oolio.io",
+    # Per-cycle ICMP burst to the primary internet target. Captures partial loss
+    # (e.g. 1/3 lost = 33% loss%) that single-shot pings cannot see.
+    [int]$PingBurstCount    = 3,
+    # Rotate the .log file when it exceeds this many MB. CSV is left untouched
+    # (small) - only the human-readable text log grows.
+    [int]$LogRotateMB       = 100,
+    # Periodic summary cadence in minutes. Was 60; lowered so even a hard-killed
+    # window has a recent rollup in the log.
+    [int]$SummaryEveryMin   = 15
 )
 
 if (-not $OutputFolder) { $OutputFolder = Get-Location }
@@ -126,6 +145,37 @@ function Read-PingResult {
         return [pscustomobject]@{ Ok = $false; AvgMs = $null; LossPct = 100 }
     } finally {
         try { $Handle.Ping.Dispose() } catch {}
+    }
+}
+
+function Start-AsyncPingBurst {
+    # Fire N pings in parallel to the same target so we can compute loss%.
+    # Returns an array of handles; read with Read-PingBurstResult.
+    param([string]$Target, [int]$Count = 3, [int]$TimeoutMs = 1500)
+    $handles = @()
+    for ($i = 0; $i -lt $Count; $i++) {
+        $handles += , (Start-AsyncPing -Target $Target -TimeoutMs $TimeoutMs)
+    }
+    return $handles
+}
+
+function Read-PingBurstResult {
+    param($Handles)
+    $sent = $Handles.Count
+    $okMs = @()
+    foreach ($h in $Handles) {
+        $r = Read-PingResult -Handle $h
+        if ($r.Ok) { $okMs += $r.AvgMs }
+    }
+    $recv = $okMs.Count
+    $lossPct = if ($sent -gt 0) { [int]((($sent - $recv) / $sent) * 100) } else { 100 }
+    $avg = if ($recv -gt 0) { [int](($okMs | Measure-Object -Average).Average) } else { $null }
+    return [pscustomobject]@{
+        Sent    = $sent
+        Recv    = $recv
+        LossPct = $lossPct
+        AvgMs   = $avg
+        Ok      = ($recv -gt 0)
     }
 }
 
@@ -380,7 +430,7 @@ $venueDisplay = if ($VenueLabel) { $VenueLabel } else { "(unset - pass -VenueLab
 $null = Invoke-SelfTest
 
 # CSV header
-$csvHeader = "Timestamp,Venue,Verdict,Interface,InterfaceType,LinkSpeed,Gateway,WifiSSID,WifiBSSID,WifiSignalPct,WifiTxRate,GatewayPingMs,DnsSystemOk,DnsSystemMs,DnsCloudflareOk,DnsCloudflareMs,PingCloudflareMs,PingGoogleMs,HttpsOk,HttpsMs,HttpsStatus,CycleMs"
+$csvHeader = "Timestamp,Venue,Verdict,Interface,InterfaceType,LinkSpeed,Gateway,WifiSSID,WifiBSSID,WifiSignalPct,WifiTxRate,GatewayPingMs,DnsSystemOk,DnsSystemMs,DnsCloudflareOk,DnsCloudflareMs,PingCloudflareMs,PingCloudflareLossPct,PingGoogleMs,HttpsOk,HttpsMs,HttpsStatus,AppHttpsOk,AppHttpsMs,AppHttpsStatus,CycleMs"
 Set-Content -Path $csvPath -Value $csvHeader -Encoding UTF8
 
 # ---- Stats counters --------------------------------------------------------
@@ -391,6 +441,9 @@ $stats = @{
     OfflineProbes             = 0
     WifiOnlyNoInternetProbes  = 0
     DnsFailureProbes          = 0
+    HttpBlockedProbes         = 0
+    AppEndpointFailureProbes  = 0
+    AppEndpointFails          = 0   # consecutive failure run
     InterfaceFlips            = 0
     LastInterface             = $null
     LastVerdict               = "Online"
@@ -400,6 +453,30 @@ $stats = @{
     LastHourSummaryAt         = Get-Date
     LastEventDrainAt          = Get-Date
     OverBudgetCycles          = 0
+    TotalLossPct              = 0   # sum of per-cycle loss% (for averaging)
+    LossCycles                = 0   # cycles with >0% loss
+}
+
+# Bounded ring buffers for percentile reporting. ~7200 entries = 10h at 5s interval.
+# When full, oldest entry is overwritten - so percentiles always reflect a recent window.
+$script:LatencyBufSize = 7200
+$script:HttpsLatencies = New-Object System.Collections.ArrayList
+$script:IcmpLatencies  = New-Object System.Collections.ArrayList
+$script:AppLatencies   = New-Object System.Collections.ArrayList
+
+function Add-Latency {
+    param([System.Collections.ArrayList]$Buf, [int]$Value)
+    if ($null -eq $Value) { return }
+    if ($Buf.Count -ge $script:LatencyBufSize) { $Buf.RemoveAt(0) }
+    $null = $Buf.Add($Value)
+}
+
+function Get-Percentile {
+    param([System.Collections.ArrayList]$Buf, [double]$P)
+    if ($Buf.Count -eq 0) { return $null }
+    $sorted = ($Buf | Sort-Object)
+    $idx = [int][math]::Floor(($P / 100.0) * ($sorted.Count - 1))
+    return $sorted[$idx]
 }
 
 function Csv-Escape {
@@ -417,7 +494,20 @@ function Write-Summary {
         [math]::Round(($stats.OnlineProbes / $stats.TotalProbes) * 100, 2)
     } else { 0 }
 
-    $title = if ($Final) { "FINAL SUMMARY" } else { "Hourly summary" }
+    $title = if ($Final) { "FINAL SUMMARY" } else { "Periodic summary" }
+    $avgLoss = if ($stats.LossCycles -gt 0) { [math]::Round($stats.TotalLossPct / $stats.LossCycles, 1) } else { 0 }
+
+    function _Fmt($v) { if ($null -eq $v) { "-" } else { "${v}ms" } }
+    $icmpP50 = _Fmt (Get-Percentile -Buf $script:IcmpLatencies  -P 50)
+    $icmpP95 = _Fmt (Get-Percentile -Buf $script:IcmpLatencies  -P 95)
+    $icmpP99 = _Fmt (Get-Percentile -Buf $script:IcmpLatencies  -P 99)
+    $httpP50 = _Fmt (Get-Percentile -Buf $script:HttpsLatencies -P 50)
+    $httpP95 = _Fmt (Get-Percentile -Buf $script:HttpsLatencies -P 95)
+    $httpP99 = _Fmt (Get-Percentile -Buf $script:HttpsLatencies -P 99)
+    $appP50  = _Fmt (Get-Percentile -Buf $script:AppLatencies   -P 50)
+    $appP95  = _Fmt (Get-Percentile -Buf $script:AppLatencies   -P 95)
+    $appP99  = _Fmt (Get-Percentile -Buf $script:AppLatencies   -P 99)
+
     $lines = @(
         ""
         "------ $title ------"
@@ -427,9 +517,15 @@ function Write-Summary {
         "Offline probes:           $($stats.OfflineProbes)"
         "Wi-Fi but no internet:    $($stats.WifiOnlyNoInternetProbes)  <-- key signal"
         "DNS-only failures:        $($stats.DnsFailureProbes)"
+        "HTTP blocked / slow:      $($stats.HttpBlockedProbes)"
+        "App endpoint failures:    $($stats.AppEndpointFailureProbes)  (target: $AppEndpoint)"
         "Interface switches:       $($stats.InterfaceFlips)"
         "Longest outage (sec):     $($stats.LongestOutageSec)"
         "Over-budget cycles:       $($stats.OverBudgetCycles)"
+        "Packet loss avg (lossy):  ${avgLoss}%  ($($stats.LossCycles) of $($stats.TotalProbes) cycles)"
+        "ICMP latency  p50/p95/p99:  $icmpP50 / $icmpP95 / $icmpP99"
+        "HTTPS latency p50/p95/p99:  $httpP50 / $httpP95 / $httpP99"
+        "App   latency p50/p95/p99:  $appP50 / $appP95 / $appP99"
         "----------------------"
         ""
     )
@@ -446,10 +542,11 @@ try {
         $cycleStart = Get-Date
 
         # Kick off async probes in parallel
-        $hPingCf = Start-AsyncPing -Target "1.1.1.1" -TimeoutMs 1500
-        $hPingGo = Start-AsyncPing -Target "8.8.8.8" -TimeoutMs 1500
-        $hDnsSys = Start-AsyncDns -Name "cloudflare.com"
-        $hHttps  = Start-AsyncHttps -Url "https://www.cloudflare.com"
+        $hPingCfBurst = Start-AsyncPingBurst -Target "1.1.1.1" -Count $PingBurstCount -TimeoutMs 1500
+        $hPingGo      = Start-AsyncPing -Target "8.8.8.8" -TimeoutMs 1500
+        $hDnsSys      = Start-AsyncDns -Name "cloudflare.com"
+        $hHttps       = Start-AsyncHttps -Url "https://www.cloudflare.com"
+        $hAppHttps    = if ($AppEndpoint) { Start-AsyncHttps -Url $AppEndpoint } else { $null }
 
         $iface = Get-ActiveInterface
         $wifi  = Get-WifiInfo
@@ -460,19 +557,22 @@ try {
         }
 
         # Wait for all async tasks (max 6s total budget)
-        $allTasks = @($hPingCf.Task, $hPingGo.Task, $hDnsSys.Task, $hHttps.Task)
-        if ($hPingGw) { $allTasks += $hPingGw.Task }
+        $allTasks = @($hPingGo.Task, $hDnsSys.Task, $hHttps.Task)
+        foreach ($h in $hPingCfBurst) { $allTasks += $h.Task }
+        if ($hAppHttps) { $allTasks += $hAppHttps.Task }
+        if ($hPingGw)   { $allTasks += $hPingGw.Task }
         try { $null = [System.Threading.Tasks.Task]::WaitAll($allTasks, 6000) } catch {}
 
         # Sync probe for DNS-against-specific-server (no async equivalent in .NET)
         $dnsCf = Test-DnsResolveSpecific -Name "cloudflare.com" -Server "1.1.1.1"
 
         # Collect results
-        $pingCf = Read-PingResult -Handle $hPingCf
-        $pingGo = Read-PingResult -Handle $hPingGo
-        $dnsSys = Read-DnsResult  -Handle $hDnsSys
-        $https  = Read-HttpsResult -Handle $hHttps
-        $gwPing = if ($hPingGw) { Read-PingResult -Handle $hPingGw } else { $null }
+        $pingCf  = Read-PingBurstResult -Handles $hPingCfBurst
+        $pingGo  = Read-PingResult -Handle $hPingGo
+        $dnsSys  = Read-DnsResult  -Handle $hDnsSys
+        $https   = Read-HttpsResult -Handle $hHttps
+        $appHttp = if ($hAppHttps) { Read-HttpsResult -Handle $hAppHttps } else { $null }
+        $gwPing  = if ($hPingGw)   { Read-PingResult  -Handle $hPingGw  } else { $null }
 
         # Verdict logic
         $hasGateway   = $gwPing -and $gwPing.Ok
@@ -480,6 +580,11 @@ try {
         $hasHttps     = $https.Ok
         $hasDns       = ($dnsSys.Ok -or $dnsCf.Ok)
         $hasInternet  = ($hasIcmp -or $hasHttps)
+
+        # Track consecutive failures of the application endpoint. A single failed
+        # HEAD to pos.oolio.io is noise (app deploys, transient 5xx). Three in a
+        # row while the rest of the internet is fine is a real app-side incident.
+        if ($appHttp -and -not $appHttp.Ok) { $stats.AppEndpointFails++ } else { $stats.AppEndpointFails = 0 }
 
         $verdict = "Online"
         $level   = "OK"
@@ -491,6 +596,9 @@ try {
             $verdict = "DnsFailure"; $level = "WARN"
         } elseif (-not $hasHttps -and $hasIcmp) {
             $verdict = "HttpBlockedOrSlow"; $level = "WARN"
+        } elseif ($hasHttps -and $appHttp -and -not $appHttp.Ok -and $stats.AppEndpointFails -ge 3) {
+            # Generic internet works but the Oolio endpoint specifically does not.
+            $verdict = "AppEndpointFailure"; $level = "ERROR"
         }
 
         # Fire traceroute on transition into a non-Online state
@@ -528,7 +636,16 @@ try {
             "Offline"            { $stats.OfflineProbes++ }
             "WifiOnlyNoInternet" { $stats.WifiOnlyNoInternetProbes++ }
             "DnsFailure"         { $stats.DnsFailureProbes++ }
+            "HttpBlockedOrSlow"  { $stats.HttpBlockedProbes++ }
+            "AppEndpointFailure" { $stats.AppEndpointFailureProbes++ }
         }
+        if ($pingCf.LossPct -gt 0) {
+            $stats.TotalLossPct += $pingCf.LossPct
+            $stats.LossCycles++
+        }
+        Add-Latency -Buf $script:HttpsLatencies -Value $https.Ms
+        Add-Latency -Buf $script:IcmpLatencies  -Value $pingCf.AvgMs
+        if ($appHttp -and $appHttp.Ok) { Add-Latency -Buf $script:AppLatencies -Value $appHttp.Ms }
 
         $cycleMs = [int]((Get-Date) - $cycleStart).TotalMilliseconds
 
@@ -536,8 +653,10 @@ try {
         $sigStr  = if ($wifi.SignalPct -ne $null) { "$($wifi.SignalPct)%" } else { "-" }
         $gwMs    = if ($gwPing -and $gwPing.Ok) { "$($gwPing.AvgMs)ms" } else { "FAIL" }
         $cfMs    = if ($pingCf.Ok) { "$($pingCf.AvgMs)ms" } else { "FAIL" }
+        $lossStr = if ($pingCf.LossPct -gt 0) { " loss=$($pingCf.LossPct)%" } else { "" }
         $httpStr = if ($https.Ok) { "$($https.Ms)ms" } else { "FAIL" }
-        $msg = "$verdict | iface=$ifaceName | SSID=$($wifi.SSID) sig=$sigStr | gw=$gwMs | 1.1.1.1=$cfMs | https=$httpStr | cycle=${cycleMs}ms"
+        $appStr  = if ($appHttp) { if ($appHttp.Ok) { "$($appHttp.Ms)ms" } else { "FAIL" } } else { "off" }
+        $msg = "$verdict | iface=$ifaceName | SSID=$($wifi.SSID) sig=$sigStr | gw=$gwMs | 1.1.1.1=$cfMs$lossStr | https=$httpStr | app=$appStr | cycle=${cycleMs}ms"
         Write-LogLine $msg $level
 
         # CSV row
@@ -559,10 +678,14 @@ try {
             $dnsCf.Ok,
             $dnsCf.Ms,
             $pingCf.AvgMs,
+            $pingCf.LossPct,
             $pingGo.AvgMs,
             $https.Ok,
             $https.Ms,
             $https.Status,
+            $(if ($appHttp) { $appHttp.Ok } else { "" }),
+            $(if ($appHttp) { $appHttp.Ms } else { "" }),
+            $(if ($appHttp) { $appHttp.Status } else { "" }),
             $cycleMs
         ) | ForEach-Object { Csv-Escape $_ }
         Add-Content -Path $csvPath -Value ($row -join ",") -Encoding UTF8
@@ -574,11 +697,25 @@ try {
             $stats.LastEventDrainAt = Get-Date
         }
 
-        # Hourly summary
-        if (((Get-Date) - $stats.LastHourSummaryAt).TotalMinutes -ge 60) {
+        # Periodic summary
+        if (((Get-Date) - $stats.LastHourSummaryAt).TotalMinutes -ge $SummaryEveryMin) {
             Write-Summary
             $stats.LastHourSummaryAt = Get-Date
         }
+
+        # Log rotation: if the .log file has grown past $LogRotateMB, rename it
+        # with a -part2/-part3 suffix and continue writing to a fresh file. The
+        # CSV is left alone - it's small and downstream tools prefer one file.
+        try {
+            $logSizeMB = [math]::Round((Get-Item $logPath -ErrorAction Stop).Length / 1MB, 1)
+            if ($logSizeMB -ge $LogRotateMB) {
+                $i = 2
+                while (Test-Path ($logPath -replace '\.log$', "-part$i.log")) { $i++ }
+                $rotated = $logPath -replace '\.log$', "-part$i.log"
+                Move-Item -Path $logPath -Destination $rotated -Force
+                Write-LogLine "Log rotated at ${logSizeMB}MB -> $rotated" "INFO"
+            }
+        } catch {}
 
         # Sleep the remainder of the interval. If the cycle blew the budget,
         # log a WARN and proceed immediately to the next cycle.
