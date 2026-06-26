@@ -82,6 +82,29 @@ function Invoke-OolioInstallCDSChrome {
     Write-Log "Launches cds.oolio.io fullscreen on the display at X=$offsetX."
 }
 
+function Invoke-OolioInstallKDSChrome {
+    Write-Section "Creating Oolio KDS Chrome app shortcut"
+
+    $chromePath = Get-ChromePath
+    if (-not $chromePath) {
+        Write-Log "Chrome not found. Install Chrome in the dependencies module first." "ERROR"
+        return
+    }
+
+    $shortcutPath = "C:\Users\Public\Desktop\Oolio KDS.lnk"
+    $shell    = New-Object -ComObject WScript.Shell
+    $shortcut = $shell.CreateShortcut($shortcutPath)
+    $shortcut.TargetPath  = $chromePath
+    # --app runs kds.oolio.io as a standalone "installed app" window (no tabs/omnibox);
+    # --start-fullscreen opens it fullscreen. Differs from POS/CDS which use --kiosk.
+    $shortcut.Arguments   = "--app=https://kds.oolio.io --start-fullscreen --no-first-run --disable-infobars"
+    $shortcut.WindowStyle = 3
+    $shortcut.Save()
+
+    Write-Log "Shortcut created: $shortcutPath" "OK"
+    Write-Log "Launches kds.oolio.io as a fullscreen Chrome app window."
+}
+
 function Invoke-OolioSetStartup {
     Write-Section "Configuring startup via shell:startup"
 
@@ -91,7 +114,7 @@ function Invoke-OolioSetStartup {
     }
 
     $copied = 0
-    foreach ($name in @("Oolio POS.lnk", "Oolio CDS.lnk")) {
+    foreach ($name in @("Oolio POS.lnk", "Oolio CDS.lnk", "Oolio KDS.lnk")) {
         $src = Join-Path "C:\Users\Public\Desktop" $name
         if (Test-Path $src) {
             Copy-Item -Path $src -Destination (Join-Path $startupFolder $name) -Force

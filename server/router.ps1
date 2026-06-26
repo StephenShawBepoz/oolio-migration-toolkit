@@ -39,6 +39,7 @@ function Get-StepFunctionName {
             "create-folders"     = "Invoke-OolioCreateFolders"
             "install-pos-chrome" = "Invoke-OolioInstallPOSChrome"
             "install-cds-chrome" = "Invoke-OolioInstallCDSChrome"
+            "install-kds-chrome" = "Invoke-OolioInstallKDSChrome"
             "set-startup"        = "Invoke-OolioSetStartup"
             "final-restart"      = "Invoke-OolioFinalRestart"
         }

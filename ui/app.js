@@ -6,11 +6,13 @@
 // S = Server (no till, no Bepoz folder cleanup)
 // ST = Server Till (everything)
 // T = Till (no SQL / data backup; still has the till cleanup steps)
+// KDS = Kitchen Display (Bepoz cleanup, full hardening, Chrome app-mode KDS screen; no SQL / data backup / CDS)
 
 const TERMINAL_TYPES = [
     { code: 'S',   label: 'Server',              desc: 'On-premises venue server. Runs SQL Server and holds Bepoz data. No POS interface.' },
     { code: 'ST',  label: 'Server Till',         desc: 'Acts as both venue server and POS terminal. Runs SQL Server, holds Bepoz data, and runs the till.' },
     { code: 'T',   label: 'Till',                desc: 'POS terminal only. No SQL Server. No Bepoz data stored locally. Connects to the server for data.' },
+    { code: 'KDS', label: 'KDS',                 desc: 'Kitchen Display screen. No SQL, no data backup, no CDS. Wipes any old Bepoz install, hardens Windows, then runs kds.oolio.io as a fullscreen Chrome app.' },
     { code: 'ALL', label: 'All modules (manual)', desc: 'Skip the type filter. Show every module and step in the original 1 / 2 / 3 / 4 order so you can cherry-pick. Use for unusual configurations or one-off troubleshooting.' }
 ];
 
@@ -20,17 +22,17 @@ const MODULES = [
         name: 'Bepoz Software',
         icon: '1',
         description: 'Back up data, stop services, and remove the legacy Bepoz install.',
-        showInTypes: ['S', 'ST', 'T'],
+        showInTypes: ['S', 'ST', 'T', 'KDS'],
         steps: [
-            { id: 'read-registry',       title: 'Read Bepoz registry',   risk: 'safe',   showInTypes: ['S','ST','T'], note: 'Reads SQL_Server, DataPath, BackupPath from HKCU\\Software\\Backoffice. No changes made.' },
-            { id: 'terminate-processes', title: 'Terminate processes from C:\\Bepoz', risk: 'safe', showInTypes: ['S','ST','T'], note: 'Walks every running process and force-stops any whose executable lives under C:\\Bepoz (matches by path, not by process name).' },
+            { id: 'read-registry',       title: 'Read Bepoz registry',   risk: 'safe',   showInTypes: ['S','ST','T','KDS'], note: 'Reads SQL_Server, DataPath, BackupPath from HKCU\\Software\\Backoffice. No changes made.' },
+            { id: 'terminate-processes', title: 'Terminate processes from C:\\Bepoz', risk: 'safe', showInTypes: ['S','ST','T','KDS'], note: 'Walks every running process and force-stops any whose executable lives under C:\\Bepoz (matches by path, not by process name).' },
             { id: 'stop-sql',            title: 'Stop and disable SQL Server', risk: 'warn', showInTypes: ['S','ST'], note: 'Stops and disables the local MSSQL$<instance> service if present. Server and server-till only.' },
             { id: 'zip-data',            title: 'Zip Bepoz data',        risk: 'safe',   showInTypes: ['S','ST'], note: 'Compresses the DataPath folder into the BackupPath using .NET ZipFile (no 2 GB limit). Server and server-till only.' },
-            { id: 'clear-startup',       title: 'Clear shell:startup',   risk: 'warn',   showInTypes: ['ST','T'], note: 'Removes everything from the user shell:startup folder. Till and server-till only.' },
-            { id: 'check-run-key',       title: 'Export & clean HKCU Run key', risk: 'warn', showInTypes: ['ST','T'], note: 'Exports the full HKCU Run key to C:\\OolioBackup\\HKCU_Run_<timestamp>.reg, then removes known Bepoz Run entries. Restore with reg import if needed.' },
-            { id: 'delete-registry',     title: 'Delete Bepoz registry', risk: 'danger', showInTypes: ['ST','T'], note: 'Removes HKCU\\Software\\Backoffice. Make sure the data backup is complete first.',
+            { id: 'clear-startup',       title: 'Clear shell:startup',   risk: 'warn',   showInTypes: ['ST','T','KDS'], note: 'Removes everything from the user shell:startup folder. Till, server-till and KDS only.' },
+            { id: 'check-run-key',       title: 'Export & clean HKCU Run key', risk: 'warn', showInTypes: ['ST','T','KDS'], note: 'Exports the full HKCU Run key to C:\\OolioBackup\\HKCU_Run_<timestamp>.reg, then removes known Bepoz Run entries. Restore with reg import if needed.' },
+            { id: 'delete-registry',     title: 'Delete Bepoz registry', risk: 'danger', showInTypes: ['ST','T','KDS'], note: 'Removes HKCU\\Software\\Backoffice. Make sure the data backup is complete first.',
               preview: ['Deletes registry key HKCU\\Software\\Backoffice and every value/subkey beneath it.', 'Does not touch HKLM autologon, HKCU Run, or any non-Bepoz key.'] },
-            { id: 'consolidate-backups', title: 'Consolidate backups & remove Bepoz folder', risk: 'danger', showInTypes: ['ST','T'],
+            { id: 'consolidate-backups', title: 'Consolidate backups & remove Bepoz folder', risk: 'danger', showInTypes: ['ST','T','KDS'],
               note: 'Moves all .zip files from C:\\Bepoz\\Backup\\ (recursive) to C:\\OolioBackup\\, then removes C:\\Bepoz\\ and all its contents. Aborts if no Bepoz_Data_*.zip ends up in the destination.',
               preview: ['Moves every *.zip under C:\\Bepoz\\Backup\\ into C:\\OolioBackup\\.', 'Then recursively deletes C:\\Bepoz\\ and everything in it.', 'Aborts (no deletion) if no Bepoz_Data_*.zip lands in the destination.'] }
         ]
@@ -40,11 +42,11 @@ const MODULES = [
         name: 'Windows Settings',
         icon: '2',
         description: 'Verify autologon, firewall, network, then rename / clean the device.',
-        showInTypes: ['S', 'ST', 'T'],
+        showInTypes: ['S', 'ST', 'T', 'KDS'],
         steps: [
-            { id: 'check-join',       title: 'Detect domain / Azure AD join state', risk: 'safe', showInTypes: ['S','ST','T'],
+            { id: 'check-join',       title: 'Detect domain / Azure AD join state', risk: 'safe', showInTypes: ['S','ST','T','KDS'],
               note: 'Reports whether this terminal is standalone, AD-joined, Azure AD-joined, or hybrid. Managed terminals may have Group Policy or Intune that overrides several hardening steps - this surfaces that risk before you spend time on changes that will be reverted at the next policy refresh.' },
-            { id: 'verify-autologon', title: 'Verify & enable autologon', risk: 'warn', showInTypes: ['S','ST','T'],
+            { id: 'verify-autologon', title: 'Verify & enable autologon', risk: 'warn', showInTypes: ['S','ST','T','KDS'],
               requiresInputs: [
                 { name: 'username', label: 'Username', placeholder: 'e.g. POSUser' },
                 { name: 'password', label: 'Password', placeholder: '', type: 'password' },
@@ -52,27 +54,27 @@ const MODULES = [
               ],
               note: 'Reads the Winlogon registry to confirm autologon. If autologon is off and you fill the form, the toolkit writes the autologon registry values. Password lands in plaintext at HKLM\\Software\\Microsoft\\Windows NT\\CurrentVersion\\Winlogon - standard AutoAdminLogon mechanism.'
             },
-            { id: 'enable-firewall',  title: 'Enable Windows Firewall', risk: 'warn', showInTypes: ['S','ST','T'], note: 'Enables firewall for Domain, Private, and Public profiles.' },
-            { id: 'active-hours',     title: 'Configure Windows Update active hours', risk: 'warn', showInTypes: ['S','ST','T'],
+            { id: 'enable-firewall',  title: 'Enable Windows Firewall', risk: 'warn', showInTypes: ['S','ST','T','KDS'], note: 'Enables firewall for Domain, Private, and Public profiles.' },
+            { id: 'active-hours',     title: 'Configure Windows Update active hours', risk: 'warn', showInTypes: ['S','ST','T','KDS'],
               requiresInputs: [{ name: 'value', label: 'Update window hour (24h, 0-23)', placeholder: '3' }],
               note: 'Locks Windows Update active hours via Group Policy. Updates only install in a 6-hour window centred on the supplied hour. Recommended: 3 (3am). Also clears NoAutoRebootWithLoggedOnUsers so the autologon user does not block reboots.' },
-            { id: 'harden-pos',       title: 'Disable Windows nags / OneDrive / Spotlight', risk: 'warn', showInTypes: ['ST','T'],
+            { id: 'harden-pos',       title: 'Disable Windows nags / OneDrive / Spotlight', risk: 'warn', showInTypes: ['ST','T','KDS'],
               note: 'Turns off OneDrive sync prompts, Windows Spotlight, Cortana, news/widgets, Edge first-run, Microsoft Account sign-in nag, and other consumer-friendly prompts that get in the way on a POS. Idempotent - safe to re-run.' },
-            { id: 'touch-pos',        title: 'Harden touch input (keyboard / swipes / autoplay)', risk: 'warn', showInTypes: ['ST','T'],
+            { id: 'touch-pos',        title: 'Harden touch input (keyboard / swipes / autoplay)', risk: 'warn', showInTypes: ['ST','T','KDS'],
               note: 'Enables touch keyboard auto-popup in desktop mode, disables edge swipes and hot corners, forces desktop mode (no tablet mode), suppresses Sticky/Filter/Toggle Keys prompts, and disables USB autoplay/autorun. Idempotent.' },
-            { id: 'power-plan',       title: 'Power plan (never sleep, hibernate off)', risk: 'warn', showInTypes: ['ST','T'],
+            { id: 'power-plan',       title: 'Power plan (never sleep, hibernate off)', risk: 'warn', showInTypes: ['ST','T','KDS'],
               note: 'Sets sleep, monitor, hibernate, and disk-spindown timeouts to 0 on AC and DC, disables hibernation entirely (reclaims hiberfil.sys), turns off Fast Startup so reboots are real reboots, and sets lid-close action to do nothing.' },
-            { id: 'disable-distractions', title: 'Disable notifications, Game Bar, Copilot, Storage Sense', risk: 'warn', showInTypes: ['ST','T'],
+            { id: 'disable-distractions', title: 'Disable notifications, Game Bar, Copilot, Storage Sense', risk: 'warn', showInTypes: ['ST','T','KDS'],
               note: 'Disables toast notifications and Notification Center, Xbox Game Bar / Game DVR, Windows Copilot, Storage Sense (so backup zips aren\'t auto-deleted), the Search box, Task View button, and Widgets icon on the taskbar. Idempotent.' },
-            { id: 'locale-time',      title: 'Locale and time (en-AU + NTP sync)', risk: 'safe', showInTypes: ['ST','T'],
+            { id: 'locale-time',      title: 'Locale and time (en-AU + NTP sync)', risk: 'safe', showInTypes: ['ST','T','KDS'],
               requiresInputs: [{ name: 'value', label: 'Time zone (Windows ID)', placeholder: 'AUS Eastern Standard Time' }],
               note: 'Sets the Windows time zone, points w32time at au.pool.ntp.org with fallbacks, forces an NTP resync, and sets system locale / user language / culture to en-AU (GeoId 12 = Australia). Run "tzutil /l" to see valid zone names if Sydney/Melbourne is not the right pick.' },
-            { id: 'check-ip',         title: 'Check IP configuration', risk: 'safe', showInTypes: ['S','ST','T'], note: 'Shows current IP and DHCP status for every active adapter. If a static IP is detected, the migrate flow surfaces a "Switch to DHCP" prompt as an inline action.' },
-            { id: 'rename-device',    title: 'Rename device', risk: 'warn', showInTypes: ['S','ST','T'], optional: true,
+            { id: 'check-ip',         title: 'Check IP configuration', risk: 'safe', showInTypes: ['S','ST','T','KDS'], note: 'Shows current IP and DHCP status for every active adapter. If a static IP is detected, the migrate flow surfaces a "Switch to DHCP" prompt as an inline action.' },
+            { id: 'rename-device',    title: 'Rename device', risk: 'warn', showInTypes: ['S','ST','T','KDS'], optional: true,
               requiresInputs: [{ name: 'value', label: 'Suffix (after "Oolio-")', placeholder: 'POS1', prefix: 'Oolio-' }],
               note: 'Optional. Renames the device to Oolio-<suffix>. Skip if the device is already correctly named. Effective after the final restart.' },
-            { id: 'clean-desktop',    title: 'Clean desktop',      risk: 'warn', showInTypes: ['ST'], note: 'Removes everything from user and public desktop. Server-till only.' },
-            { id: 'set-wallpaper',    title: 'Apply Oolio wallpaper', risk: 'safe', showInTypes: ['ST'], note: 'Copies assets/wallpaper.jpg to C:\\Oolio\\Assets and applies it. Server-till only.' }
+            { id: 'clean-desktop',    title: 'Clean desktop',      risk: 'warn', showInTypes: ['ST','KDS'], note: 'Removes everything from user and public desktop. Server-till and KDS only.' },
+            { id: 'set-wallpaper',    title: 'Apply Oolio wallpaper', risk: 'safe', showInTypes: ['ST','KDS'], note: 'Copies assets/wallpaper.jpg to C:\\Oolio\\Assets and applies it. Server-till and KDS only.' }
         ]
     },
     {
@@ -80,11 +82,11 @@ const MODULES = [
         name: 'Oolio Dependencies',
         icon: '3',
         description: 'Verify or install Chrome and WebView2, plus printer utility links.',
-        showInTypes: ['ST'],
+        showInTypes: ['ST', 'KDS'],
         steps: [
-            { id: 'check-chrome',      title: 'Check / install Google Chrome', risk: 'safe', showInTypes: ['ST'], note: 'Reports Chrome install path and version. If Chrome is missing, downloads the Google Enterprise MSI and installs it silently (msiexec /qn). Requires internet at this step.' },
+            { id: 'check-chrome',      title: 'Check / install Google Chrome', risk: 'safe', showInTypes: ['ST','KDS'], note: 'Reports Chrome install path and version. If Chrome is missing, downloads the Google Enterprise MSI and installs it silently (msiexec /qn). Requires internet at this step.' },
             { id: 'check-webview2',    title: 'Check / install Edge WebView2', risk: 'safe', showInTypes: ['ST'], note: 'Required for Windows native Oolio POS and CDS apps. If missing, downloads the Microsoft Evergreen Bootstrapper and installs silently (/silent /install). Requires internet at this step.' },
-            { id: 'teamviewer',        title: 'Check / install TeamViewer', risk: 'safe', showInTypes: ['ST'], note: 'Reports TeamViewer install path and version. If missing, downloads the full TeamViewer installer (TeamViewer_Setup_x64.exe) and installs silently with /S. Requires internet at this step.' },
+            { id: 'teamviewer',        title: 'Check / install TeamViewer', risk: 'safe', showInTypes: ['ST','KDS'], note: 'Reports TeamViewer install path and version. If missing, downloads the full TeamViewer installer (TeamViewer_Setup_x64.exe) and installs silently with /S. Requires internet at this step.' },
             { id: 'printer-utilities', title: 'Printer utilities',   risk: 'safe', showInTypes: ['ST'], linksOnly: true,
               links: [
                 { label: 'Epson TM Utility',                href: 'https://download.epson-biz.com/modules/pos/' },
@@ -103,14 +105,15 @@ const MODULES = [
         name: 'Oolio POS Setup',
         icon: '4',
         description: 'Set deployment options, create folders and shortcuts, schedule the final restart.',
-        showInTypes: ['ST'],
+        showInTypes: ['ST', 'KDS'],
         steps: [
             { id: 'deployment-config',  title: 'Deployment options',         risk: 'safe', configStep: true, showInTypes: ['ST'], note: 'Choose deployment mode (Chrome kiosk in v1) and whether a CDS is present.' },
-            { id: 'create-folders',     title: 'Create Oolio folders',       risk: 'safe', showInTypes: ['ST'], note: 'Creates C:\\Oolio and Assets/Certs/Logs subfolders.' },
+            { id: 'create-folders',     title: 'Create Oolio folders',       risk: 'safe', showInTypes: ['ST','KDS'], note: 'Creates C:\\Oolio and Assets/Certs/Logs subfolders.' },
             { id: 'install-pos-chrome', title: 'Create Oolio POS shortcut (Chrome kiosk)', risk: 'safe', showInTypes: ['ST'], note: 'Public-desktop shortcut launching pos.oolio.io fullscreen.', showWhen: m => m.deploymentMode === 'chrome' },
             { id: 'install-cds-chrome', title: 'Create Oolio CDS shortcut (Chrome kiosk)', risk: 'safe', showInTypes: ['ST'], note: 'Public-desktop shortcut launching cds.oolio.io on the second display.', showWhen: m => m.deploymentMode === 'chrome' && m.hasCDS === true },
-            { id: 'set-startup',        title: 'Configure startup',          risk: 'warn', showInTypes: ['ST'], note: 'Copies the Oolio desktop shortcut(s) into shell:startup so the kiosk launches when the autologon user signs in. Also tidies up legacy HKCU Run entries from older toolkit builds.' },
-            { id: 'final-restart',      title: 'Schedule final restart',     risk: 'danger', showInTypes: ['ST'], note: 'Schedules a 30-second restart so the device rename, wallpaper, and autologon changes take effect. Run "shutdown /a" from a command prompt to cancel.',
+            { id: 'install-kds-chrome', title: 'Create Oolio KDS shortcut (Chrome app)', risk: 'safe', showInTypes: ['KDS'], note: 'Public-desktop shortcut "Oolio KDS" launching kds.oolio.io as a fullscreen Chrome app window (--app + --start-fullscreen).' },
+            { id: 'set-startup',        title: 'Configure startup',          risk: 'warn', showInTypes: ['ST','KDS'], note: 'Copies the Oolio desktop shortcut(s) into shell:startup so the kiosk launches when the autologon user signs in. Also tidies up legacy HKCU Run entries from older toolkit builds.' },
+            { id: 'final-restart',      title: 'Schedule final restart',     risk: 'danger', showInTypes: ['ST','KDS'], note: 'Schedules a 30-second restart so the device rename, wallpaper, and autologon changes take effect. Run "shutdown /a" from a command prompt to cancel.',
               preview: ['Runs: shutdown /r /t 30. The terminal restarts in 30 seconds.', 'No data is destroyed - this only reboots so device-rename, wallpaper, and autologon take effect.', 'Cancel with: shutdown /a (from any command prompt within 30 seconds).'] }
         ]
     }

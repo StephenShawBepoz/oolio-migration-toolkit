@@ -4,6 +4,12 @@ All notable changes to the Oolio Migration Toolkit. Newest first.
 
 ## Unreleased
 
+### Added — KDS terminal type
+- New `KDS` terminal type alongside Server / Server Till / Till. Targets a kitchen display screen.
+- KDS journey: Bepoz cleanup (no SQL / data backup), full Windows hardening, Chrome + TeamViewer dependencies (no WebView2 / printer utilities), then create-folders → KDS shortcut → startup → final restart. No deployment-config form and no CDS step.
+- `install-kds-chrome` step / `Invoke-OolioInstallKDSChrome`: creates `Oolio KDS.lnk` on the public desktop launching `kds.oolio.io` as a fullscreen Chrome **app** window (`--app=https://kds.oolio.io --start-fullscreen`). Differs from POS/CDS, which use `--kiosk`.
+- `set-startup` now also copies `Oolio KDS.lnk` into shell:startup.
+
 ### Added — touch POS hardening (Module 2)
 - `touch-pos` step: enables touch-keyboard auto-popup in desktop mode, disables edge swipes / charms / hot corners, forces desktop mode (no tablet mode), suppresses Sticky/Filter/Toggle Keys prompts, disables USB autoplay/autorun.
 - `power-plan` step: sets sleep / monitor / hibernate / disk-spindown to 0 on AC and DC, disables hibernation entirely, turns off Fast Startup, sets lid-close action to do nothing.
