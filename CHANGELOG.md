@@ -2,7 +2,7 @@
 
 All notable changes to the Oolio Migration Toolkit. Newest first.
 
-## Unreleased
+## v1.4 — 2026-06-29
 
 ### Added — KDS terminal type
 - New `KDS` terminal type alongside Server / Server Till / Till. Targets a kitchen display screen.
