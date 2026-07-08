@@ -634,7 +634,10 @@ function renderSelectType(forChange = false) {
           <div>Oolio Migration Toolkit</div>
           <span class="app-version">${TOOLKIT_VERSION}</span>
         </div>
-        ${forChange ? '<button class="btn-secondary" id="cancel-type-change">Cancel</button>' : ''}
+        <div class="app-header-actions">
+          ${forChange ? '<button class="btn-secondary" id="cancel-type-change">Cancel</button>' : ''}
+          <a href="mailto:stephen.shaw@oolio.com?subject=Oolio%20Migration%20Toolkit%20Feedback" class="btn-feedback">Send feedback</a>
+        </div>
       </div>
       <div class="select-type">
         <h2 class="select-type-heading">${forChange ? 'Change terminal type' : 'Select this terminal type'}</h2>
@@ -882,7 +885,10 @@ function renderMigrate() {
           <div>Oolio Migration Toolkit</div>
           <span class="app-version">${TOOLKIT_VERSION}</span>
         </div>
-        <button class="btn-secondary" id="back-home">← Home</button>
+        <div class="app-header-actions">
+          <button class="btn-secondary" id="back-home">← Home</button>
+          <a href="mailto:stephen.shaw@oolio.com?subject=Oolio%20Migration%20Toolkit%20Feedback" class="btn-feedback">Send feedback</a>
+        </div>
       </div>
 
       <div class="migrate-progress">
@@ -1163,7 +1169,10 @@ function renderModule() {
           <div>Oolio Migration Toolkit</div>
           <span class="app-version">${TOOLKIT_VERSION}</span>
         </div>
-        <button class="btn-secondary" id="back-home">← Back</button>
+        <div class="app-header-actions">
+          <button class="btn-secondary" id="back-home">← Back</button>
+          <a href="mailto:stephen.shaw@oolio.com?subject=Oolio%20Migration%20Toolkit%20Feedback" class="btn-feedback">Send feedback</a>
+        </div>
       </div>
       <div class="module-header">
         <div class="module-title-block">

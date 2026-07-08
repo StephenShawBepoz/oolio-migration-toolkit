@@ -73,6 +73,20 @@ button:disabled { opacity: 0.4; cursor: not-allowed; }
 }
 .btn-ghost:hover:not(:disabled) { color: var(--oolio-purple); }
 
+.btn-feedback {
+  background: transparent;
+  color: var(--text-secondary);
+  padding: 8px 16px;
+  font-size: 14px;
+  text-decoration: none;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  display: inline-block;
+  cursor: pointer;
+  transition: background 0.15s, color 0.15s;
+}
+.btn-feedback:hover { background: var(--bg); color: var(--oolio-purple); }
+
 input[type="text"] {
   font-family: inherit;
   font-size: 14px;
@@ -111,6 +125,11 @@ input[type="text"]:focus { outline: 2px solid var(--oolio-purple); outline-offse
   font-weight: 600;
   color: var(--text-muted);
   letter-spacing: 0.02em;
+}
+.app-header-actions {
+  display: flex;
+  gap: 12px;
+  align-items: center;
 }
 
 /* Boot-time integrity issues from GET /health */
