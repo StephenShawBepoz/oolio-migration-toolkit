@@ -113,6 +113,26 @@ input[type="text"]:focus { outline: 2px solid var(--oolio-purple); outline-offse
   letter-spacing: 0.02em;
 }
 
+/* Boot-time integrity issues from GET /health */
+.health-banner {
+  margin-bottom: 20px;
+  padding: 14px 18px;
+  background: var(--danger-bg);
+  border: 1px solid var(--danger);
+  border-radius: 8px;
+  color: var(--error-text);
+  font-size: 14px;
+}
+.health-banner ul {
+  margin: 8px 0;
+  padding-left: 20px;
+}
+.health-banner li {
+  font-family: 'Consolas', 'Courier New', monospace;
+  font-size: 12.5px;
+  margin: 2px 0;
+}
+
 /* ---------- Overall progress ---------- */
 .overall-progress {
   background: var(--surface);

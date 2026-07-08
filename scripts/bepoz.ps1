@@ -115,21 +115,37 @@ function Invoke-BepozZipData {
     Write-Log "Destination: $zipPath"
     Write-Log "Compressing (using .NET ZipFile - no 2 GB limit)..."
 
+    # If BackupPath is nested inside DataPath (some sites configure it that way),
+    # CreateFromDirectory would try to include its own half-written zip in the
+    # archive and fail. Build the zip in %TEMP% and move it into place instead.
+    $dataPrefix = (Resolve-Path $dataPath).Path.TrimEnd('\') + '\'
+    $createPath = $zipPath
+    if ($zipPath.StartsWith($dataPrefix, [System.StringComparison]::OrdinalIgnoreCase)) {
+        $createPath = Join-Path $env:TEMP "Bepoz_Data_$timestamp.zip"
+        Write-Log "BackupPath is inside DataPath - building the zip in %TEMP% first, then moving it into place." "WARN"
+    }
+
     # PowerShell 5.1's Compress-Archive buffers through MemoryStream and chokes on archives
     # larger than ~2 GB ("Stream was too long"). Use the underlying .NET API directly.
-    if (Test-Path $zipPath) { Remove-Item -Path $zipPath -Force -ErrorAction SilentlyContinue }
+    if (Test-Path $createPath) { Remove-Item -Path $createPath -Force -ErrorAction SilentlyContinue }
+    if (Test-Path $zipPath)    { Remove-Item -Path $zipPath    -Force -ErrorAction SilentlyContinue }
 
     try {
         Add-Type -AssemblyName System.IO.Compression.FileSystem -ErrorAction SilentlyContinue
         [System.IO.Compression.ZipFile]::CreateFromDirectory(
             $dataPath,
-            $zipPath,
+            $createPath,
             [System.IO.Compression.CompressionLevel]::Optimal,
             $false   # do not include the source folder name in the archive root
         )
+        if ($createPath -ne $zipPath) {
+            Move-Item -Path $createPath -Destination $zipPath -Force
+            Write-Log "Zip moved into backup folder." "OK"
+        }
     } catch {
         Write-Log "Compression failed: $($_.Exception.Message)" "ERROR"
-        if (Test-Path $zipPath) { Remove-Item -Path $zipPath -Force -ErrorAction SilentlyContinue }
+        if (Test-Path $createPath) { Remove-Item -Path $createPath -Force -ErrorAction SilentlyContinue }
+        if (Test-Path $zipPath)    { Remove-Item -Path $zipPath    -Force -ErrorAction SilentlyContinue }
         return
     }
 

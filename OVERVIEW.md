@@ -30,7 +30,7 @@ The toolkit replaces the human checklist with a guided, opinionated run that:
 - Streams live PowerShell output to the browser so the technician sees what's happening
 - Treats every danger step as an explicit, ticked confirmation
 - Persists progress so a 45-minute migration can survive a coffee break, a venue closure, or a remote-session disconnect
-- Ships as a single ~117 KB zip with no install footprint, deployable via ScreenConnect or USB
+- Ships as a single zip (~35 MB, dominated by the bundled Oolio POS installer; the toolkit itself is ~120 KB) with no install footprint, deployable via ScreenConnect or USB
 
 ---
 
@@ -43,9 +43,10 @@ The toolkit asks one question at the start — **what kind of terminal is this?*
 | **S** | Server | On-premises venue server. Runs SQL Server and holds Bepoz data. No POS interface. |
 | **ST** | Server Till | Acts as both venue server and POS terminal. Runs SQL, holds data, and runs the till. |
 | **T** | Till | POS terminal only. No SQL Server. No Bepoz data stored locally. |
+| **KDS** | KDS | Kitchen Display screen. Bepoz cleanup and full hardening, then kds.oolio.io as a fullscreen Chrome app. No SQL, data backup, or CDS. |
 | **ALL** | All modules (manual) | Skip the type filter. Show every step in the original 1 / 2 / 3 / 4 order for cherry-picking. |
 
-The migration is organised into four modules. Modules 3 and 4 only apply to Server-Till machines, so a pure Server or pure Till tech sees a shorter flow.
+The migration is organised into four modules. Modules 3 and 4 only apply to Server-Till and KDS machines, so a pure Server or pure Till tech sees a shorter flow.
 
 ### Module 1 — Bepoz Software
 
@@ -201,7 +202,7 @@ See `screenshots/` for the captured states:
 - **EventSource (SSE)** — one-way browser ← server streaming for live PowerShell output
 - **GitHub Releases** — versioned distribution; `bootstrap.ps1` pulls `OolioMigration.zip` from the latest release
 
-The whole thing is ~117 KB compressed. No internet required at runtime except for Chrome auto-install in Module 3.
+The toolkit code is ~120 KB compressed; the release zip is ~35 MB because it bundles the Oolio POS native installer. No internet required at runtime except for the Chrome / WebView2 / TeamViewer auto-installs in Module 3.
 
 ---
 

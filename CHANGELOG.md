@@ -2,6 +2,23 @@
 
 All notable changes to the Oolio Migration Toolkit. Newest first.
 
+## v1.5.1 — 2026-07-08
+
+### Security
+- Autologon credentials no longer travel in the `/run` URL (EventSource is GET-only, and URLs persist in browser history on the terminal). The UI now stashes them via a CSRF-protected `POST /input`; the server holds them in memory, hands them to the step as environment variables (unchanged), and clears the stash after one use. Query-param fallback retained for backward compatibility.
+
+### Hardened
+- **Boot validator now parses every module script** (PowerShell AST) — a syntax error surfaces at server start instead of mid-migration when a tech runs the step.
+- **Boot validator now cross-checks app.js against the router** — a UI step with no router mapping (the last remaining drift gap) is reported at start instead of 404ing at click time.
+- **`GET /health` endpoint + UI banner** — validator results were previously buried in the server console; the home view now shows a red integrity banner listing any issues, with advice to re-extract the release zip.
+- **`zip-data` nested-BackupPath guard** — if `BackupPath` sits inside `DataPath`, the zip is built in `%TEMP%` and moved into place, instead of `CreateFromDirectory` failing on its own half-written archive.
+- `Invoke-StepStreaming` initialises its lock variables before the `try` block so the `finally` cleanup can never reference undefined state.
+- Corrected a stale comment about env-var credential lifetime in `server.ps1`.
+
+### Changed
+- Favicon (inline data-URI, Oolio purple) — kills the `/favicon.ico` 404 noise in every session log.
+- README gains a screenshots section; OVERVIEW updated for KDS in the type table, module 3/4 applicability, and honest zip-size numbers (~35 MB with the bundled installer).
+
 ## v1.5 — 2026-07-08
 
 ### Added — native Oolio POS app deployment (Module 4)

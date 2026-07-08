@@ -22,6 +22,16 @@ iwr https://raw.githubusercontent.com/StephenShawBepoz/oolio-migration-toolkit/m
 
 Works on Windows 10 and Windows 11. Chrome, WebView2, and TeamViewer are auto-installed at run-time if missing (needs internet at those steps). The rest of the toolkit runs fully offline once unpacked.
 
+## Screenshots
+
+| Select terminal type | Guided migrate flow |
+|---|---|
+| ![Terminal type selection](screenshots/01-select-type.png) | ![Migrate pause with input form](screenshots/06-migrate-pause-form.png) |
+
+| Module view | Deployment options |
+|---|---|
+| ![Bepoz module steps](screenshots/03-module-bepoz.png) | ![Deployment configuration](screenshots/10-deployment-config.png) |
+
 ## Folder structure
 
 ```

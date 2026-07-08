@@ -2,7 +2,7 @@
 
 // Bump alongside CHANGELOG.md on every release. Shown in the app header so a
 // technician (or a support ticket screenshot) instantly identifies the build.
-const TOOLKIT_VERSION = 'v1.5';
+const TOOLKIT_VERSION = 'v1.5.1';
 
 // ---------- Module + step definitions ----------
 
@@ -138,6 +138,7 @@ let state = {
     outputFilter: {},
     inputValues: {},
     confirmTicked: {},
+    healthIssues: [],
     // Latest progress event per step. Updated 1x/sec while a download or install
     // is running; cleared via { done: true } when the operation finishes.
     progressBars: {},
@@ -162,6 +163,17 @@ window.addEventListener('DOMContentLoaded', async () => {
         if (!state.progress.meta) state.progress.meta = {};
     } catch (e) {
         state.progress = { meta: {} };
+    }
+    // Boot-time integrity check: the server validates router <-> module <->
+    // defaults <-> UI consistency and parses every module script at startup.
+    // Surface any issues as a banner instead of leaving them buried in the
+    // server console the technician never sees.
+    try {
+        const h = await fetch('/health');
+        const hj = await h.json();
+        state.healthIssues = (hj && hj.issues) || [];
+    } catch (e) {
+        state.healthIssues = [];
     }
     if (!state.progress.meta.terminalType) state.view = 'select-type';
     render();
@@ -461,7 +473,7 @@ function retryMigrateStep() {
 
 // ---------- SSE step runner ----------
 
-function runStep(moduleId, stepId, extras) {
+async function runStep(moduleId, stepId, extras) {
     const key = moduleId + '.' + stepId;
     state.runningStep = key;
     state.outputLog[key] = [];
@@ -472,6 +484,26 @@ function runStep(moduleId, stepId, extras) {
     let params = {};
     if (typeof extras === 'string') params.value = extras;
     else if (extras && typeof extras === 'object') params = extras;
+
+    // Secrets never travel in the /run URL - EventSource is GET-only and URLs
+    // persist in browser history on the terminal. Stash them server-side via
+    // POST /input first; the server hands them to the step as environment
+    // variables and clears the stash after one use.
+    const SECRET_STEPS = { 'verify-autologon': ['username', 'password', 'domain'] };
+    const secretFields = SECRET_STEPS[stepId];
+    if (secretFields && secretFields.some(f => params[f])) {
+        const fields = {};
+        secretFields.forEach(f => { fields[f] = params[f] || ''; delete params[f]; });
+        try {
+            await fetch('/input', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json', 'X-Oolio-Token': getCsrfToken() },
+                body: JSON.stringify({ module: moduleId, step: stepId, fields })
+            });
+        } catch (e) {
+            console.error('Failed to stash step inputs; running without them', e);
+        }
+    }
 
     let url = `/run?module=${encodeURIComponent(moduleId)}&step=${encodeURIComponent(stepId)}&t=${encodeURIComponent(getCsrfToken())}`;
     Object.keys(params).forEach(k => {
@@ -645,7 +677,15 @@ function renderHome() {
     const tt = getTerminalType();
     const ttLabel = (TERMINAL_TYPES.find(t => t.code === tt) || {}).label || '';
 
+    const healthBanner = state.healthIssues.length ? `
+      <div class="health-banner">
+        <strong>Toolkit integrity check found ${state.healthIssues.length} issue(s) at startup:</strong>
+        <ul>${state.healthIssues.map(i => `<li>${escapeHtml(i)}</li>`).join('')}</ul>
+        <div>This copy of the toolkit may be corrupted or partially updated. Re-extract the release zip before migrating.</div>
+      </div>` : '';
+
     return `
+      ${healthBanner}
       <div class="app-header">
         <div class="app-title">
           <div class="app-title-dot"></div>

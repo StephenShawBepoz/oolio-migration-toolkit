@@ -101,12 +101,23 @@ $script:CsrfToken = ([System.BitConverter]::ToString($bytes)).Replace("-", "").T
 # by "moduleId/stepId". Cleared in the streaming function's finally block.
 $script:ActiveSteps = @{}
 
+# ----- Pending secret inputs -----
+# Credentials stashed by POST /input just before a /run. EventSource is GET-only
+# and URLs persist in browser history on the terminal, so secrets must never
+# ride in the /run query string. Keyed by "moduleId/stepId"; single-use - the
+# streaming function consumes and removes the entry.
+$script:PendingSecrets = @{}
+
 # ----- Manifest validator -----
 # Catch UI/router/module drift at boot. For every router entry, confirm the
-# referenced function actually exists in the matching module script. Also warn
-# if Get-DefaultProgress is missing keys that exist in the router.
+# referenced function actually exists in the matching module script and that
+# Get-DefaultProgress covers it. Also: full AST syntax check of every module
+# script (a typo otherwise only surfaces when a tech runs the step mid-
+# migration), and a reverse check that every runnable step declared in app.js
+# has a router mapping. Returns the issue list; the caller prints it and
+# exposes it via GET /health so the UI can surface a banner.
 function Test-StepManifest {
-    param([string]$ScriptsPath)
+    param([string]$ScriptsPath, [string]$UiPath)
     $issues = @()
     $defaults = Get-DefaultProgress
     $scriptMap = @{
@@ -117,9 +128,20 @@ function Test-StepManifest {
     }
     # Pull the router table by inspecting the function source.
     $routerSrc = (Get-Command Get-StepFunctionName).ScriptBlock.ToString()
+    $allRouterSteps = @()
     foreach ($mod in $scriptMap.Keys) {
         $modScript = Join-Path $ScriptsPath $scriptMap[$mod]
         if (-not (Test-Path $modScript)) { $issues += "Missing module script: $modScript"; continue }
+
+        # AST parse - catches syntax errors before a technician does.
+        $parseErrors = $null
+        [void][System.Management.Automation.Language.Parser]::ParseFile($modScript, [ref]$null, [ref]$parseErrors)
+        if ($parseErrors -and $parseErrors.Count -gt 0) {
+            $pe = $parseErrors[0]
+            $issues += "Syntax error in $($scriptMap[$mod]) line $($pe.Extent.StartLineNumber): $($pe.Message)"
+            continue
+        }
+
         $modContent = Get-Content -Path $modScript -Raw
         # Crude but effective: extract function names defined in the module.
         $defined = [regex]::Matches($modContent, '(?m)^\s*function\s+([A-Za-z][A-Za-z0-9_-]+)') | ForEach-Object { $_.Groups[1].Value }
@@ -130,6 +152,7 @@ function Test-StepManifest {
         foreach ($m in $stepPairs) {
             $stepId = $m.Groups[1].Value
             $func   = $m.Groups[2].Value
+            $allRouterSteps += $stepId
             if ($defined -notcontains $func) {
                 $issues += "Router maps $mod/$stepId -> $func but $func is not defined in $($scriptMap[$mod])"
             }
@@ -138,15 +161,35 @@ function Test-StepManifest {
             }
         }
     }
-    if ($issues.Count -gt 0) {
-        Write-Output "==== STEP MANIFEST ISSUES ===="
-        foreach ($i in $issues) { Write-Output "  $i" }
-        Write-Output "=============================="
-    } else {
-        Write-Output "Step manifest OK ($($scriptMap.Count) modules validated)."
+
+    # Reverse check: every runnable step the UI declares must have a router
+    # mapping, or the Run button 404s at click time. Steps flagged configStep
+    # or linksOnly never execute PowerShell, so they're exempt. Relies on each
+    # step definition opening on a single line (current app.js convention).
+    $appJsPath = Join-Path $UiPath "app.js"
+    if (Test-Path $appJsPath) {
+        foreach ($line in (Get-Content -Path $appJsPath)) {
+            if ($line -notmatch "title:") { continue }
+            if ($line -match "configStep:\s*true" -or $line -match "linksOnly:\s*true") { continue }
+            if ($line -match "id:\s*'([a-z0-9-]+)'") {
+                $sid = $matches[1]
+                if ($allRouterSteps -notcontains $sid) {
+                    $issues += "app.js declares runnable step '$sid' but the router has no mapping for it"
+                }
+            }
+        }
     }
+
+    return $issues
 }
-Test-StepManifest -ScriptsPath $scriptsPath
+$script:ManifestIssues = @(Test-StepManifest -ScriptsPath $scriptsPath -UiPath $uiPath)
+if ($script:ManifestIssues.Count -gt 0) {
+    Write-Output "==== STEP MANIFEST ISSUES ===="
+    foreach ($i in $script:ManifestIssues) { Write-Output "  $i" }
+    Write-Output "=============================="
+} else {
+    Write-Output "Step manifest OK (4 modules validated, scripts parsed, UI cross-checked)."
+}
 
 # ----- Reset stale 'running' statuses on startup -----
 # If the toolkit was killed mid-step (browser closed, terminal rebooted, etc.) the step
@@ -285,6 +328,11 @@ function Send-SSE {
 function Invoke-StepStreaming {
     param($Response, [string]$ModuleId, [string]$StepId, [hashtable]$Params)
 
+    # Initialised before the try so the finally block can always reference them,
+    # even if an exception fires before the lock is taken.
+    $stepKey  = "$ModuleId/$StepId"
+    $lockHeld = $false
+
     $Response.StatusCode = 200
     $Response.ContentType = "text/event-stream"
     $Response.Headers.Add("Cache-Control", "no-cache")
@@ -313,7 +361,6 @@ function Invoke-StepStreaming {
         }
 
         # Per-step locking: refuse a second concurrent run of the same step.
-        $stepKey = "$ModuleId/$StepId"
         if ($script:ActiveSteps.ContainsKey($stepKey)) {
             $null = Send-SSE -Response $Response -Data "__ERROR__: Step '$stepKey' is already running in another browser tab. Wait for it to finish or close the other tab."
             $null = Send-SSE -Response $Response -Data "__DONE__"
@@ -338,11 +385,22 @@ function Invoke-StepStreaming {
         } elseif ($StepId -eq "install-pos-app") {
             $argSegment = " -toolkitRoot " + (Quote-PSLiteral $ToolkitRoot)
         } elseif ($StepId -eq "verify-autologon") {
-            # Credentials supplied via env vars - the function reads them, then
-            # the parent clears them from this process when the child exits.
-            $childEnv["OOLIO_AL_USERNAME"] = [string]$Params["username"]
-            $childEnv["OOLIO_AL_PASSWORD"] = [string]$Params["password"]
-            $childEnv["OOLIO_AL_DOMAIN"]   = [string]$Params["domain"]
+            # Credentials reach the child via ProcessStartInfo environment
+            # variables, so they never touch the parent's own environment, the
+            # child's command line, or any process-monitoring tooling. Prefer
+            # the POST /input stash (kept out of the /run URL and browser
+            # history); fall back to query params for backward compatibility.
+            $stash = $script:PendingSecrets[$stepKey]
+            if ($stash) {
+                $childEnv["OOLIO_AL_USERNAME"] = [string]$stash.username
+                $childEnv["OOLIO_AL_PASSWORD"] = [string]$stash.password
+                $childEnv["OOLIO_AL_DOMAIN"]   = [string]$stash.domain
+                $script:PendingSecrets.Remove($stepKey)
+            } else {
+                $childEnv["OOLIO_AL_USERNAME"] = [string]$Params["username"]
+                $childEnv["OOLIO_AL_PASSWORD"] = [string]$Params["password"]
+                $childEnv["OOLIO_AL_DOMAIN"]   = [string]$Params["domain"]
+            }
         } elseif ($StepId -eq "active-hours") {
             $argSegment = " -updateHour " + (Quote-PSLiteral $value)
         } elseif ($StepId -eq "locale-time") {
@@ -439,6 +497,40 @@ try {
             switch -Regex ("$method $path") {
                 '^GET /ping$' {
                     Write-TextResponse -Response $response -Body "OK"
+                    break
+                }
+                '^GET /health$' {
+                    # Boot-time validator results, machine-readable. The UI
+                    # shows a banner on the home view when issues is non-empty.
+                    $payload = @{
+                        status = $(if ($script:ManifestIssues.Count -eq 0) { "ok" } else { "issues" })
+                        issues = @($script:ManifestIssues)
+                    } | ConvertTo-Json -Depth 3
+                    Write-TextResponse -Response $response -Body $payload -ContentType "application/json; charset=utf-8"
+                    break
+                }
+                '^POST /input$' {
+                    # Stash secret step inputs ahead of a /run so they never
+                    # appear in the /run URL. CSRF-protected like POST /progress.
+                    $hdrToken = $request.Headers["X-Oolio-Token"]
+                    if ($hdrToken -ne $script:CsrfToken) {
+                        Write-TextResponse -Response $response -Body '{"status":"error","message":"csrf"}' -ContentType "application/json" -Status 403
+                        break
+                    }
+                    $reader = New-Object System.IO.StreamReader($request.InputStream, $request.ContentEncoding)
+                    $body = $reader.ReadToEnd()
+                    $reader.Close()
+                    try {
+                        $obj = $body | ConvertFrom-Json
+                        if ($obj.module -and $obj.step -and $obj.fields) {
+                            $script:PendingSecrets["$($obj.module)/$($obj.step)"] = $obj.fields
+                            Write-TextResponse -Response $response -Body '{"status":"ok"}' -ContentType "application/json"
+                        } else {
+                            Write-TextResponse -Response $response -Body '{"status":"error","message":"module, step, and fields are required"}' -ContentType "application/json" -Status 400
+                        }
+                    } catch {
+                        Write-TextResponse -Response $response -Body '{"status":"error","message":"invalid json"}' -ContentType "application/json" -Status 400
+                    }
                     break
                 }
                 '^GET /$' {
