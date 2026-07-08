@@ -73,19 +73,13 @@ button:disabled { opacity: 0.4; cursor: not-allowed; }
 }
 .btn-ghost:hover:not(:disabled) { color: var(--oolio-purple); }
 
-.btn-feedback {
-  background: transparent;
+.feedback-email {
   color: var(--text-secondary);
   padding: 8px 16px;
-  font-size: 14px;
-  text-decoration: none;
-  border: 1px solid var(--border);
-  border-radius: 6px;
-  display: inline-block;
-  cursor: pointer;
-  transition: background 0.15s, color 0.15s;
+  font-size: 13px;
+  font-family: 'Courier New', monospace;
+  white-space: nowrap;
 }
-.btn-feedback:hover { background: var(--bg); color: var(--oolio-purple); }
 
 input[type="text"] {
   font-family: inherit;

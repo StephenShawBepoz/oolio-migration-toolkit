@@ -636,7 +636,7 @@ function renderSelectType(forChange = false) {
         </div>
         <div class="app-header-actions">
           ${forChange ? '<button class="btn-secondary" id="cancel-type-change">Cancel</button>' : ''}
-          <a href="mailto:stephen.shaw@oolio.com?subject=Oolio%20Migration%20Toolkit%20Feedback" class="btn-feedback">Send feedback</a>
+          <div class="feedback-email">Feedback: stephen.shaw@oolio.com</div>
         </div>
       </div>
       <div class="select-type">
@@ -887,7 +887,7 @@ function renderMigrate() {
         </div>
         <div class="app-header-actions">
           <button class="btn-secondary" id="back-home">← Home</button>
-          <a href="mailto:stephen.shaw@oolio.com?subject=Oolio%20Migration%20Toolkit%20Feedback" class="btn-feedback">Send feedback</a>
+          <div class="feedback-email">Feedback: stephen.shaw@oolio.com</div>
         </div>
       </div>
 
@@ -1171,7 +1171,7 @@ function renderModule() {
         </div>
         <div class="app-header-actions">
           <button class="btn-secondary" id="back-home">← Back</button>
-          <a href="mailto:stephen.shaw@oolio.com?subject=Oolio%20Migration%20Toolkit%20Feedback" class="btn-feedback">Send feedback</a>
+          <div class="feedback-email">Feedback: stephen.shaw@oolio.com</div>
         </div>
       </div>
       <div class="module-header">
