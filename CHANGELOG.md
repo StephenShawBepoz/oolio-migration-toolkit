@@ -13,8 +13,19 @@ All notable changes to the Oolio Migration Toolkit. Newest first.
 - The native step is passed `-toolkitRoot` by the server so it can locate the `installers\` folder.
 
 ### Added — disable multi-touch (Module 2)
-- `disable-multitouch` step / `Invoke-WindowsDisableMultitouch`: keeps single-finger tap but turns off pinch-zoom and two/three/four-finger gestures (`HKCU\Control Panel\Desktop\TouchGestureSetting=0`), touch press-and-hold right-click (`Wisp\Touch\TouchMode_hold=0`), pen press-and-hold right-click (`Wisp\Pen\SysEventParameters\HoldMode=3`), the legacy multi-touch/inking toggle (`Wisp\MultiTouch\MultiTouchEnabled=0`), and edge swipes (`EdgeUI\AllowEdgeSwipe=0`). Idempotent.
+- `disable-multitouch` step / `Invoke-WindowsDisableMultitouch`: keeps single-finger tap but turns off pinch-zoom and two/three/four-finger gestures (`Control Panel\Desktop\TouchGestureSetting=0`), touch press-and-hold right-click (`Wisp\Touch\TouchMode_hold=0`), pen press-and-hold right-click (`Wisp\Pen\SysEventParameters\HoldMode=3`), the legacy multi-touch/inking toggle (`Wisp\MultiTouch\MultiTouchEnabled=0`), and edge swipes (`EdgeUI\AllowEdgeSwipe=0`). Idempotent.
+- Per-user keys are applied via `Set-RegistryForAllUsers` — every local profile plus the default-profile template — so the autologon POS user is covered even when the toolkit runs under a different admin account. (First real consumer of the v1.4 helper.)
 - Output notes are explicit that gesture suppression is driver-dependent and that true hardware single-touch is enforced by the digitiser driver, not Windows.
+
+### Fixed
+- `Get-DefaultProgress` was missing `switch-dhcp`, `teamviewer`, and `install-kds-chrome` — the boot-time step-manifest validator warned about them on every server start.
+- The Bepoz "Run safe steps" chain skipped `clear-startup` / `check-run-key` on KDS terminals even though both steps are shown for KDS.
+- The dependencies "Check dependencies" chain ran the hidden WebView2 step on KDS terminals and never included TeamViewer. It now runs exactly the steps visible for the selected terminal type.
+
+### Changed
+- Toolkit version (`v1.5`) now shows in the app header on every view.
+- `installers/README.txt` added (drop-folder convention, matching `assets/`).
+- README refreshed: folder structure now includes `installers\` and `tools\`, notes the 8081–8084 port fallback, and points to `OVERVIEW.md`/`CHANGELOG.md` as current docs (`claude.md` is marked as the historical v1 spec).
 
 ## v1.4 — 2026-06-29
 

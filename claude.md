@@ -1,6 +1,12 @@
 # Oolio Migration Toolkit — Technical Specification
 ## Claude Code Handoff Document
 
+> **Note (v1.5):** This is the original v1.0 design specification, kept for
+> reference. The implementation has since evolved — terminal types (S/ST/T/KDS),
+> the migrate flow, native Oolio POS app install, silent dependency installers,
+> and more. For current behaviour see `OVERVIEW.md` and `CHANGELOG.md`; the code
+> itself is the source of truth.
+
 **Project:** Bepoz to Oolio Platform Migration Toolkit  
 **Purpose:** A locally-hosted web toolkit that guides a technician through migrating a Windows POS terminal from Bepoz to the Oolio Platform  
 **Author:** Stephen, Head of Onboarding NSW  

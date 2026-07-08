@@ -1,5 +1,9 @@
 // app.js - Oolio Migration Toolkit single-page UI
 
+// Bump alongside CHANGELOG.md on every release. Shown in the app header so a
+// technician (or a support ticket screenshot) instantly identifies the build.
+const TOOLKIT_VERSION = 'v1.5';
+
 // ---------- Module + step definitions ----------
 
 // Terminal types are now session-level. They drive which modules / steps are visible.
@@ -63,7 +67,7 @@ const MODULES = [
             { id: 'touch-pos',        title: 'Harden touch input (keyboard / swipes / autoplay)', risk: 'warn', showInTypes: ['ST','T','KDS'],
               note: 'Enables touch keyboard auto-popup in desktop mode, disables edge swipes and hot corners, forces desktop mode (no tablet mode), suppresses Sticky/Filter/Toggle Keys prompts, and disables USB autoplay/autorun. Idempotent.' },
             { id: 'disable-multitouch', title: 'Disable multi-touch gestures (pinch-zoom / press-and-hold)', risk: 'warn', showInTypes: ['ST','T','KDS'],
-              note: 'Keeps single-finger tap but turns off pinch-zoom, two/three/four-finger swipes, touch and pen press-and-hold right-click, and edge swipes so accidental multi-touch does not misfire the POS. Registry (HKCU) applies to the user that ran the toolkit; re-run signed in as the POS user if that differs. True single-touch is ultimately a digitiser-driver setting - see the output notes. Idempotent.' },
+              note: 'Keeps single-finger tap but turns off pinch-zoom, two/three/four-finger swipes, touch and pen press-and-hold right-click, and edge swipes so accidental multi-touch does not misfire the POS. Applied to every local user profile (plus the default-profile template), so the autologon POS user is covered regardless of which account runs the toolkit. True single-touch is ultimately a digitiser-driver setting - see the output notes. Idempotent.' },
             { id: 'power-plan',       title: 'Power plan (never sleep, hibernate off)', risk: 'warn', showInTypes: ['ST','T','KDS'],
               note: 'Sets sleep, monitor, hibernate, and disk-spindown timeouts to 0 on AC and DC, disables hibernation entirely (reclaims hiberfil.sys), turns off Fast Startup so reboots are real reboots, and sets lid-close action to do nothing.' },
             { id: 'disable-distractions', title: 'Disable notifications, Game Bar, Copilot, Storage Sense', risk: 'warn', showInTypes: ['ST','T','KDS'],
@@ -534,15 +538,20 @@ async function runBepozSafeChain() {
         const proceed = confirm('Backup zip step is complete. Confirm the zip file exists in the backup folder before continuing.');
         if (!proceed) return;
     }
-    if (tt === 'ST' || tt === 'T') {
+    if (tt === 'ST' || tt === 'T' || tt === 'KDS') {
         await runStep('bepoz', 'clear-startup');
         await runStep('bepoz', 'check-run-key');
     }
 }
 
 async function runDepsCheckChain() {
-    await runStep('dependencies', 'check-chrome');
-    await runStep('dependencies', 'check-webview2');
+    // Drive off visibility so KDS terminals don't run the hidden WebView2 step
+    // and TeamViewer is included for the types that show it.
+    const mod = MODULES.find(m => m.id === 'dependencies');
+    const runnable = getVisibleSteps(mod).filter(s => !s.linksOnly);
+    for (const step of runnable) {
+        await runStep('dependencies', step.id);
+    }
 }
 
 // ---------- Rendering ----------
@@ -591,6 +600,7 @@ function renderSelectType(forChange = false) {
         <div class="app-title">
           <div class="app-title-dot"></div>
           <div>Oolio Migration Toolkit</div>
+          <span class="app-version">${TOOLKIT_VERSION}</span>
         </div>
         ${forChange ? '<button class="btn-secondary" id="cancel-type-change">Cancel</button>' : ''}
       </div>
@@ -640,6 +650,7 @@ function renderHome() {
         <div class="app-title">
           <div class="app-title-dot"></div>
           <div>Oolio Migration Toolkit</div>
+          <span class="app-version">${TOOLKIT_VERSION}</span>
         </div>
         <div class="terminal-type-pill">
           <span class="terminal-type-pill-label">Type:</span>
@@ -829,6 +840,7 @@ function renderMigrate() {
         <div class="app-title">
           <div class="app-title-dot"></div>
           <div>Oolio Migration Toolkit</div>
+          <span class="app-version">${TOOLKIT_VERSION}</span>
         </div>
         <button class="btn-secondary" id="back-home">← Home</button>
       </div>
@@ -1099,7 +1111,7 @@ function renderModule() {
     } else if (mod.id === 'dependencies') {
         autoRunBar = `
           <div class="auto-run-bar">
-            <div class="auto-run-bar-text">Check Chrome and WebView2 in sequence.</div>
+            <div class="auto-run-bar-text">Run every check / install step for this terminal type in sequence.</div>
             <button class="btn-primary" id="deps-chain" ${state.runningStep ? 'disabled' : ''}>Check dependencies</button>
           </div>`;
     }
@@ -1109,6 +1121,7 @@ function renderModule() {
         <div class="app-title">
           <div class="app-title-dot"></div>
           <div>Oolio Migration Toolkit</div>
+          <span class="app-version">${TOOLKIT_VERSION}</span>
         </div>
         <button class="btn-secondary" id="back-home">← Back</button>
       </div>

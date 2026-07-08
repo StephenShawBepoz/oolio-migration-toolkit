@@ -454,44 +454,39 @@ function Invoke-WindowsTouchPOS {
 function Invoke-WindowsDisableMultitouch {
     Write-Section "Disabling multi-touch gestures for POS use"
     Write-Log "Goal: keep single-finger tap working, but stop pinch-zoom, two/three/four-finger swipes, and press-and-hold right-click from misfiring the POS."
-
-    function Ensure-Path($p) { if (-not (Test-Path $p)) { New-Item -Path $p -Force | Out-Null } }
+    Write-Log "Per-user keys are written to every local profile plus the default-profile template, so the autologon POS user is covered even when the toolkit runs under a different admin account."
 
     # --- Multi-finger touch gestures (pinch-zoom / three- / four-finger swipes) ---
-    # HKCU\Control Panel\Desktop\TouchGestureSetting = 0 turns off the OS touch
-    # gesture recogniser. Effectiveness is driver-dependent: some OEM digitiser
-    # drivers own gestures and ignore this, which is why it is layered with the
-    # keys below rather than relied on alone.
-    Ensure-Path "HKCU:\Control Panel\Desktop"
-    Set-ItemProperty -Path "HKCU:\Control Panel\Desktop" -Name "TouchGestureSetting" -Value 0 -Type DWord -Force
-    Write-Log "Multi-finger touch gestures disabled (TouchGestureSetting=0)" "OK"
+    # TouchGestureSetting = 0 turns off the OS touch gesture recogniser.
+    # Effectiveness is driver-dependent: some OEM digitiser drivers own gestures
+    # and ignore this, which is why it is layered with the keys below rather
+    # than relied on alone.
+    Write-Log "Multi-finger touch gestures (TouchGestureSetting=0):"
+    Set-RegistryForAllUsers -SubKey "Control Panel\Desktop" -Name "TouchGestureSetting" -Value 0
 
     # --- Press-and-hold -> right-click (touch) ---
     # A long press on the touchscreen otherwise pops the context menu mid-sale.
-    Ensure-Path "HKCU:\Software\Microsoft\Wisp\Touch"
-    Set-ItemProperty -Path "HKCU:\Software\Microsoft\Wisp\Touch" -Name "TouchMode_hold" -Value 0 -Type DWord -Force
-    Write-Log "Touch press-and-hold right-click disabled (TouchMode_hold=0)" "OK"
+    Write-Log "Touch press-and-hold right-click (TouchMode_hold=0):"
+    Set-RegistryForAllUsers -SubKey "Software\Microsoft\Wisp\Touch" -Name "TouchMode_hold" -Value 0
 
     # --- Press-and-hold -> right-click (pen), for pen-capable panels. HoldMode: 1=on, 3=off ---
-    Ensure-Path "HKCU:\Software\Microsoft\Wisp\Pen\SysEventParameters"
-    Set-ItemProperty -Path "HKCU:\Software\Microsoft\Wisp\Pen\SysEventParameters" -Name "HoldMode" -Value 3 -Type DWord -Force
-    Write-Log "Pen press-and-hold right-click disabled (HoldMode=3)" "OK"
+    Write-Log "Pen press-and-hold right-click (HoldMode=3):"
+    Set-RegistryForAllUsers -SubKey "Software\Microsoft\Wisp\Pen\SysEventParameters" -Name "HoldMode" -Value 3
 
     # --- Legacy 'Enable multi-touch gestures and inking' toggle (Pen and Touch applet) ---
     # Honoured on Win7/8; frequently ignored on Win10/11 where the digitiser driver
     # owns multi-touch. Written anyway - harmless where unsupported.
-    Ensure-Path "HKCU:\Software\Microsoft\Wisp\MultiTouch"
-    Set-ItemProperty -Path "HKCU:\Software\Microsoft\Wisp\MultiTouch" -Name "MultiTouchEnabled" -Value 0 -Type DWord -Force
-    Write-Log "Legacy MultiTouchEnabled=0 written (may be ignored on Win10/11 - see note below)" "WARN"
+    Write-Log "Legacy multi-touch/inking toggle (MultiTouchEnabled=0; may be ignored on Win10/11):"
+    Set-RegistryForAllUsers -SubKey "Software\Microsoft\Wisp\MultiTouch" -Name "MultiTouchEnabled" -Value 0
 
     # --- Edge swipes (Action Center / task view / charms) - machine-wide policy ---
     # Overlaps the Touch POS step; repeated here so this step stands alone.
-    Ensure-Path "HKLM:\SOFTWARE\Policies\Microsoft\Windows\EdgeUI"
-    Set-ItemProperty -Path "HKLM:\SOFTWARE\Policies\Microsoft\Windows\EdgeUI" -Name "AllowEdgeSwipe" -Value 0 -Type DWord -Force
+    $edgeUI = "HKLM:\SOFTWARE\Policies\Microsoft\Windows\EdgeUI"
+    if (-not (Test-Path $edgeUI)) { New-Item -Path $edgeUI -Force | Out-Null }
+    Set-ItemProperty -Path $edgeUI -Name "AllowEdgeSwipe" -Value 0 -Type DWord -Force
     Write-Log "Edge swipes disabled machine-wide (AllowEdgeSwipe=0)" "OK"
 
     Write-Log "Multi-touch hardening complete. Changes apply at next sign-in." "WARN"
-    Write-Log "HKCU keys apply to the user that ran the toolkit. If the autologon POS user is a different account, re-run this step signed in as that user." "WARN"
     Write-Log "Note: true single-touch (ignoring extra contacts at the hardware level) is enforced by the touch-panel/digitiser driver, not Windows. If pinch-zoom still fires after a reboot, disable multi-touch in the OEM touch utility or set the panel to single-touch in its firmware/driver." "WARN"
 }
 

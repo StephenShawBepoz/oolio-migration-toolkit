@@ -104,6 +104,14 @@ input[type="text"]:focus { outline: 2px solid var(--oolio-purple); outline-offse
   border-radius: 50%;
   background: var(--oolio-purple);
 }
+.app-version {
+  align-self: flex-end;
+  padding-bottom: 4px;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-muted);
+  letter-spacing: 0.02em;
+}
 
 /* ---------- Overall progress ---------- */
 .overall-progress {

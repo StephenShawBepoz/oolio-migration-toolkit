@@ -18,20 +18,23 @@ iwr https://raw.githubusercontent.com/StephenShawBepoz/oolio-migration-toolkit/m
 2. Extract `OolioMigration\` to the terminal (e.g. `C:\OolioMigration\`).
 3. (Optional) Replace `assets\wallpaper.jpg` with a different image if needed.
 4. Right-click `Launch.ps1` and choose **Run as Administrator**.
-5. The browser opens to `http://localhost:8080` with the technician UI.
+5. The browser opens to `http://localhost:8080` with the technician UI (falls back to 8081–8084 if 8080 is taken).
 
-Works on Windows 10 and Windows 11. Chrome is auto-installed at run-time if missing (needs internet at that step). The rest of the toolkit runs fully offline once unpacked.
+Works on Windows 10 and Windows 11. Chrome, WebView2, and TeamViewer are auto-installed at run-time if missing (needs internet at those steps). The rest of the toolkit runs fully offline once unpacked.
 
 ## Folder structure
 
 ```
 OolioMigration\
   Launch.ps1            entry point
+  bootstrap.ps1         remote one-liner bootstrapper (ScreenConnect)
   progress.json         auto-created, persists state
   server\               HTTP listener + router
   ui\                   single-page web app
   scripts\              module + shared PowerShell logic
   assets\               wallpaper.jpg ships here
+  installers\           Oolio POS native installer (POS-*-installer.exe)
+  tools\                standalone diagnostics (Internet-Check)
 ```
 
-See `claude.md` for the full specification.
+See `OVERVIEW.md` for how the toolkit works and `CHANGELOG.md` for release history. (`claude.md` is the original v1 design spec, kept for reference.)

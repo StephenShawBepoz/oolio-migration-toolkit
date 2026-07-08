@@ -44,6 +44,7 @@ function Get-DefaultProgress {
             "disable-distractions" = "pending"
             "locale-time"          = "pending"
             "check-ip"         = "pending"
+            "switch-dhcp"      = "pending"
             "rename-device"    = "pending"
             "clean-desktop"    = "pending"
             "set-wallpaper"    = "pending"
@@ -51,6 +52,7 @@ function Get-DefaultProgress {
         dependencies = @{
             "check-chrome"      = "pending"
             "check-webview2"    = "pending"
+            "teamviewer"        = "pending"
             "printer-utilities" = "pending"
         }
         oolio = @{
@@ -59,6 +61,7 @@ function Get-DefaultProgress {
             "install-pos-app"    = "pending"
             "install-pos-chrome" = "pending"
             "install-cds-chrome" = "pending"
+            "install-kds-chrome" = "pending"
             "set-startup"        = "pending"
             "final-restart"      = "pending"
         }
