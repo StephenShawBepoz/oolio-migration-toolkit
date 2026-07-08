@@ -74,11 +74,14 @@ button:disabled { opacity: 0.4; cursor: not-allowed; }
 .btn-ghost:hover:not(:disabled) { color: var(--oolio-purple); }
 
 .feedback-email {
-  color: var(--text-secondary);
-  padding: 8px 16px;
+  background: var(--oolio-purple);
+  color: white;
+  padding: 8px 14px;
   font-size: 13px;
   font-family: 'Courier New', monospace;
   white-space: nowrap;
+  border-radius: 20px;
+  display: inline-block;
 }
 
 input[type="text"] {
