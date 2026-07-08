@@ -62,6 +62,8 @@ const MODULES = [
               note: 'Turns off OneDrive sync prompts, Windows Spotlight, Cortana, news/widgets, Edge first-run, Microsoft Account sign-in nag, and other consumer-friendly prompts that get in the way on a POS. Idempotent - safe to re-run.' },
             { id: 'touch-pos',        title: 'Harden touch input (keyboard / swipes / autoplay)', risk: 'warn', showInTypes: ['ST','T','KDS'],
               note: 'Enables touch keyboard auto-popup in desktop mode, disables edge swipes and hot corners, forces desktop mode (no tablet mode), suppresses Sticky/Filter/Toggle Keys prompts, and disables USB autoplay/autorun. Idempotent.' },
+            { id: 'disable-multitouch', title: 'Disable multi-touch gestures (pinch-zoom / press-and-hold)', risk: 'warn', showInTypes: ['ST','T','KDS'],
+              note: 'Keeps single-finger tap but turns off pinch-zoom, two/three/four-finger swipes, touch and pen press-and-hold right-click, and edge swipes so accidental multi-touch does not misfire the POS. Registry (HKCU) applies to the user that ran the toolkit; re-run signed in as the POS user if that differs. True single-touch is ultimately a digitiser-driver setting - see the output notes. Idempotent.' },
             { id: 'power-plan',       title: 'Power plan (never sleep, hibernate off)', risk: 'warn', showInTypes: ['ST','T','KDS'],
               note: 'Sets sleep, monitor, hibernate, and disk-spindown timeouts to 0 on AC and DC, disables hibernation entirely (reclaims hiberfil.sys), turns off Fast Startup so reboots are real reboots, and sets lid-close action to do nothing.' },
             { id: 'disable-distractions', title: 'Disable notifications, Game Bar, Copilot, Storage Sense', risk: 'warn', showInTypes: ['ST','T','KDS'],
@@ -107,10 +109,11 @@ const MODULES = [
         description: 'Set deployment options, create folders and shortcuts, schedule the final restart.',
         showInTypes: ['ST', 'KDS'],
         steps: [
-            { id: 'deployment-config',  title: 'Deployment options',         risk: 'safe', configStep: true, showInTypes: ['ST'], note: 'Choose deployment mode (Chrome kiosk in v1) and whether a CDS is present.' },
+            { id: 'deployment-config',  title: 'Deployment options',         risk: 'safe', configStep: true, showInTypes: ['ST'], note: 'Choose deployment mode - the native Windows app (installer bundled in the toolkit) or the Chrome kiosk - and whether a CDS is present.' },
             { id: 'create-folders',     title: 'Create Oolio folders',       risk: 'safe', showInTypes: ['ST','KDS'], note: 'Creates C:\\Oolio and Assets/Certs/Logs subfolders.' },
+            { id: 'install-pos-app',    title: 'Install Oolio POS (native Windows app)', risk: 'safe', showInTypes: ['ST'], note: 'Runs installers\\POS-*-installer.exe silently (electron-builder NSIS, /S, per-machine to Program Files), detects the installed executable, and drops an "Oolio POS" shortcut on the Public desktop for the startup step to pick up. This native app replaces the Chrome kiosk. The installer must be present in the toolkit installers\\ folder.', showWhen: m => m.deploymentMode === 'windows' },
             { id: 'install-pos-chrome', title: 'Create Oolio POS shortcut (Chrome kiosk)', risk: 'safe', showInTypes: ['ST'], note: 'Public-desktop shortcut launching pos.oolio.io fullscreen.', showWhen: m => m.deploymentMode === 'chrome' },
-            { id: 'install-cds-chrome', title: 'Create Oolio CDS shortcut (Chrome kiosk)', risk: 'safe', showInTypes: ['ST'], note: 'Public-desktop shortcut launching cds.oolio.io on the second display.', showWhen: m => m.deploymentMode === 'chrome' && m.hasCDS === true },
+            { id: 'install-cds-chrome', title: 'Create Oolio CDS shortcut (Chrome kiosk)', risk: 'safe', showInTypes: ['ST'], note: 'Public-desktop shortcut launching cds.oolio.io on the second display. The CDS is always a Chrome kiosk page, so this shows whenever a CDS is present regardless of POS deployment mode (needs Chrome installed).', showWhen: m => m.hasCDS === true },
             { id: 'install-kds-chrome', title: 'Create Oolio KDS shortcut (Chrome app)', risk: 'safe', showInTypes: ['KDS'], note: 'Public-desktop shortcut "Oolio KDS" launching kds.oolio.io as a fullscreen Chrome app window (--app + --start-fullscreen).' },
             { id: 'set-startup',        title: 'Configure startup',          risk: 'warn', showInTypes: ['ST','KDS'], note: 'Copies the Oolio desktop shortcut(s) into shell:startup so the kiosk launches when the autologon user signs in. Also tidies up legacy HKCU Run entries from older toolkit builds.' },
             { id: 'final-restart',      title: 'Schedule final restart',     risk: 'danger', showInTypes: ['ST','KDS'], note: 'Schedules a 30-second restart so the device rename, wallpaper, and autologon changes take effect. Run "shutdown /a" from a command prompt to cancel.',
@@ -945,7 +948,7 @@ function renderOutputLog(moduleId, stepId) {
 
 function renderConfigStep() {
     const meta = getMeta();
-    const dm = meta.deploymentMode || 'chrome';
+    const dm = meta.deploymentMode || 'windows';
     const cds = meta.hasCDS === true;
 
     return `
@@ -954,8 +957,8 @@ function renderConfigStep() {
         <div class="form-group">
           <label class="form-group-label">Deployment mode</label>
           <div class="radio-row">
+            <label><input type="radio" name="deploymentMode" value="windows" ${dm==='windows'?'checked':''}> Windows app (native installer)</label>
             <label><input type="radio" name="deploymentMode" value="chrome" ${dm==='chrome'?'checked':''}> Chrome (kiosk)</label>
-            <label><input type="radio" name="deploymentMode" value="windows" ${dm==='windows'?'checked':''} disabled> Windows app (v2 - not yet available)</label>
           </div>
         </div>
         <div class="form-group">
@@ -1220,7 +1223,7 @@ function attachMigrateHandlers() {
         const dm = document.querySelector('input[name="deploymentMode"]:checked');
         const cds = document.querySelector('input[name="hasCDS"]:checked');
         state.progress.meta = state.progress.meta || {};
-        state.progress.meta.deploymentMode = dm ? dm.value : 'chrome';
+        state.progress.meta.deploymentMode = dm ? dm.value : 'windows';
         state.progress.meta.hasCDS = cds ? (cds.value === 'yes') : false;
         setStepStatus('oolio', 'deployment-config', 'complete');
         if (state.view === 'migrate') {
@@ -1317,7 +1320,7 @@ function attachModuleHandlers() {
         const dm = document.querySelector('input[name="deploymentMode"]:checked');
         const cds = document.querySelector('input[name="hasCDS"]:checked');
         state.progress.meta = state.progress.meta || {};
-        state.progress.meta.deploymentMode = dm ? dm.value : 'chrome';
+        state.progress.meta.deploymentMode = dm ? dm.value : 'windows';
         state.progress.meta.hasCDS = cds ? (cds.value === 'yes') : false;
         setStepStatus('oolio', 'deployment-config', 'complete');
         render();

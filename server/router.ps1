@@ -21,6 +21,7 @@ function Get-StepFunctionName {
             "active-hours"     = "Invoke-WindowsActiveHours"
             "harden-pos"       = "Invoke-WindowsHardenPOS"
             "touch-pos"             = "Invoke-WindowsTouchPOS"
+            "disable-multitouch"    = "Invoke-WindowsDisableMultitouch"
             "power-plan"            = "Invoke-WindowsPowerPlan"
             "disable-distractions"  = "Invoke-WindowsDisableDistractions"
             "locale-time"           = "Invoke-WindowsLocaleTime"
@@ -37,6 +38,7 @@ function Get-StepFunctionName {
         }
         "oolio" = @{
             "create-folders"     = "Invoke-OolioCreateFolders"
+            "install-pos-app"    = "Invoke-OolioInstallPOSApp"
             "install-pos-chrome" = "Invoke-OolioInstallPOSChrome"
             "install-cds-chrome" = "Invoke-OolioInstallCDSChrome"
             "install-kds-chrome" = "Invoke-OolioInstallKDSChrome"

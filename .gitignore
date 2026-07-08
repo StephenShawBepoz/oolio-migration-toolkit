@@ -1,4 +1,5 @@
 progress.json
+.claude/
 certs/*.cer
 *.log
 .DS_Store

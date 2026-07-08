@@ -39,6 +39,7 @@ function Get-DefaultProgress {
             "active-hours"     = "pending"
             "harden-pos"       = "pending"
             "touch-pos"            = "pending"
+            "disable-multitouch"   = "pending"
             "power-plan"           = "pending"
             "disable-distractions" = "pending"
             "locale-time"          = "pending"
@@ -55,6 +56,7 @@ function Get-DefaultProgress {
         oolio = @{
             "deployment-config"  = "pending"
             "create-folders"     = "pending"
+            "install-pos-app"    = "pending"
             "install-pos-chrome" = "pending"
             "install-cds-chrome" = "pending"
             "set-startup"        = "pending"
@@ -329,6 +331,8 @@ function Invoke-StepStreaming {
         if ($StepId -eq "rename-device") {
             $argSegment = " -terminalName " + (Quote-PSLiteral $value)
         } elseif ($StepId -eq "set-wallpaper") {
+            $argSegment = " -toolkitRoot " + (Quote-PSLiteral $ToolkitRoot)
+        } elseif ($StepId -eq "install-pos-app") {
             $argSegment = " -toolkitRoot " + (Quote-PSLiteral $ToolkitRoot)
         } elseif ($StepId -eq "verify-autologon") {
             # Credentials supplied via env vars - the function reads them, then

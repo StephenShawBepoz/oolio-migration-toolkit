@@ -105,6 +105,128 @@ function Invoke-OolioInstallKDSChrome {
     Write-Log "Launches kds.oolio.io as a fullscreen Chrome app window."
 }
 
+function Get-OolioPosExePath {
+    # Resolve the installed Oolio POS executable from the uninstall registry
+    # (written by the electron-builder NSIS installer). Tries DisplayIcon first
+    # (points straight at the exe), then scans InstallLocation for the main exe.
+    $entries = Get-InstalledProgram -NameLike "*Oolio*POS*"
+    if (-not $entries -or $entries.Count -eq 0) { $entries = Get-InstalledProgram -NameLike "*Oolio*" }
+
+    foreach ($e in $entries) {
+        $props = Get-ItemProperty -Path $e.RegistryPath -ErrorAction SilentlyContinue
+
+        # DisplayIcon is usually "C:\Program Files\Oolio POS\Oolio POS.exe",0
+        $icon = $props.DisplayIcon
+        if ($icon) {
+            $iconPath = $icon.Split(',')[0].Trim().Trim('"')
+            if ($iconPath -and (Test-Path $iconPath) -and $iconPath.ToLower().EndsWith(".exe") -and ((Split-Path $iconPath -Leaf) -notlike "*Uninstall*")) {
+                return $iconPath
+            }
+        }
+
+        # Fall back to the largest top-level exe in InstallLocation, skipping the uninstaller.
+        $loc = $props.InstallLocation
+        if ($loc -and (Test-Path $loc)) {
+            $exe = Get-ChildItem -Path $loc -Filter "*.exe" -File -ErrorAction SilentlyContinue |
+                Where-Object { $_.Name -notlike "Uninstall*" } |
+                Sort-Object Length -Descending | Select-Object -First 1
+            if ($exe) { return $exe.FullName }
+        }
+    }
+    return $null
+}
+
+function Invoke-OolioInstallPOSApp {
+    param([string]$toolkitRoot)
+
+    Write-Section "Installing Oolio POS (native Windows app)"
+
+    if (-not $toolkitRoot) { $toolkitRoot = (Resolve-Path "$PSScriptRoot\..").Path }
+    $installerDir = Join-Path $toolkitRoot "installers"
+
+    if (-not (Test-Path $installerDir)) {
+        Write-Log "Installers folder not found at: $installerDir" "ERROR"
+        Write-Log "Place the Oolio POS installer (POS-*-installer.exe) in the toolkit 'installers' folder and retry." "WARN"
+        return
+    }
+
+    # Pick the newest POS installer (by write time). Falls back to any .exe.
+    $candidates = @(Get-ChildItem -Path $installerDir -Filter "POS-*installer.exe" -File -ErrorAction SilentlyContinue)
+    if ($candidates.Count -eq 0) {
+        $candidates = @(Get-ChildItem -Path $installerDir -Filter "*.exe" -File -ErrorAction SilentlyContinue)
+    }
+    if ($candidates.Count -eq 0) {
+        Write-Log "No installer .exe found in $installerDir." "ERROR"
+        return
+    }
+
+    $installer = $candidates | Sort-Object LastWriteTime -Descending | Select-Object -First 1
+    Write-Log "Installer: $($installer.Name)"
+    Write-Log "Size: $([math]::Round($installer.Length / 1MB, 1)) MB"
+
+    # --- Signature check (advisory for a locally-supplied installer) ---
+    try {
+        $sig = Get-AuthenticodeSignature -FilePath $installer.FullName -ErrorAction Stop
+        $subject = if ($sig.SignerCertificate) { $sig.SignerCertificate.Subject } else { "(unsigned)" }
+        if ($sig.Status -eq 'Valid') {
+            Write-Log "Authenticode signature: Valid - $subject" "OK"
+        } else {
+            Write-Log "Authenticode signature status: $($sig.Status) - $subject" "WARN"
+            Write-Log "Proceeding because this installer was supplied locally in the toolkit. Verify its source if you did not place it there yourself." "WARN"
+        }
+    } catch {
+        Write-Log "Could not read signature: $($_.Exception.Message)" "WARN"
+    }
+
+    # --- Idempotency: report an existing install; the installer will upgrade in place ---
+    $existing = @(Get-InstalledProgram -NameLike "*Oolio*POS*")
+    if ($existing.Count -eq 0) { $existing = @(Get-InstalledProgram -NameLike "*Oolio*") }
+    if ($existing.Count -gt 0) {
+        Write-Log "Existing install detected: $($existing[0].DisplayName) $($existing[0].DisplayVersion). The installer will upgrade/repair in place." "WARN"
+    }
+
+    # --- Run the electron-builder NSIS installer silently ---
+    # /S = silent. The installer is perMachine (its manifest requires admin), so it
+    # installs to Program Files for all users. (/allusers is ignored under /S, so we
+    # rely on the perMachine build rather than passing it.)
+    Write-Log "Running installer silently (/S). Installs per-machine to Program Files; this can take a minute..."
+    $proc = Start-Process -FilePath $installer.FullName -ArgumentList "/S" -PassThru
+    Wait-ProcessWithHeartbeat -Process $proc -Label "Installing Oolio POS"
+
+    if ($proc.ExitCode -ne 0) {
+        Write-Log "Installer exited with code $($proc.ExitCode)." "ERROR"
+        Write-Log "Run $($installer.Name) manually (double-click) to see the GUI error." "WARN"
+        return
+    }
+    Write-Log "Installer exited cleanly (code 0)." "OK"
+
+    # --- Resolve the installed app exe ---
+    $exePath = Get-OolioPosExePath
+    if (-not $exePath) {
+        Write-Log "Install reported success but the Oolio POS executable could not be located from the uninstall registry." "WARN"
+        Write-Log "Check Program Files for the Oolio POS folder, then create the startup shortcut manually." "WARN"
+        return
+    }
+    Write-Log "Oolio POS executable: $exePath" "OK"
+    $ver = (Get-Item $exePath).VersionInfo.FileVersion
+    if ($ver) { Write-Log "Installed file version: $ver" }
+
+    # --- Drop a Public-Desktop shortcut named "Oolio POS.lnk" so the existing
+    #     'Configure startup' step copies it into shell:startup unchanged. This is
+    #     the same shortcut name the Chrome-kiosk path uses, so set-startup needs
+    #     no branching for native vs Chrome. ---
+    $shortcutPath = "C:\Users\Public\Desktop\Oolio POS.lnk"
+    $shell    = New-Object -ComObject WScript.Shell
+    $shortcut = $shell.CreateShortcut($shortcutPath)
+    $shortcut.TargetPath       = $exePath
+    $shortcut.WorkingDirectory = Split-Path $exePath -Parent
+    $shortcut.WindowStyle      = 3   # maximised
+    $shortcut.Save()
+    Write-Log "Shortcut created: $shortcutPath -> $exePath" "OK"
+    Write-Log "The native app manages its own fullscreen window - no Chrome kiosk flags are used."
+    Write-Log "Next: run 'Configure startup' to copy this shortcut into shell:startup so the POS launches at login."
+}
+
 function Invoke-OolioSetStartup {
     Write-Section "Configuring startup via shell:startup"
 

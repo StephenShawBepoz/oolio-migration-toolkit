@@ -2,6 +2,20 @@
 
 All notable changes to the Oolio Migration Toolkit. Newest first.
 
+## v1.5 — 2026-07-08
+
+### Added — native Oolio POS app deployment (Module 4)
+- Deployment mode **Windows app (native installer)** is now selectable in the deployment-config form and is the new default; the native app replaces the Chrome kiosk for POS.
+- `install-pos-app` step / `Invoke-OolioInstallPOSApp`: runs the bundled `installers\POS-*-installer.exe` silently (electron-builder NSIS, `/S`, per-machine to Program Files), verifies the Authenticode signature (advisory for a locally-supplied file), detects the installed executable from the uninstall registry, and drops an `Oolio POS.lnk` on the Public desktop.
+- Reuses the existing `set-startup` step unchanged — because the native step names its shortcut `Oolio POS.lnk` (same as the Chrome path), shell:startup autostart works with no branching.
+- `Get-OolioPosExePath` helper: resolves the installed exe via `DisplayIcon`, falling back to the largest non-uninstaller exe under `InstallLocation`.
+- `install-cds-chrome` now shows whenever a CDS is present, independent of POS deployment mode (the CDS is always a Chrome kiosk page). Needs Chrome installed.
+- The native step is passed `-toolkitRoot` by the server so it can locate the `installers\` folder.
+
+### Added — disable multi-touch (Module 2)
+- `disable-multitouch` step / `Invoke-WindowsDisableMultitouch`: keeps single-finger tap but turns off pinch-zoom and two/three/four-finger gestures (`HKCU\Control Panel\Desktop\TouchGestureSetting=0`), touch press-and-hold right-click (`Wisp\Touch\TouchMode_hold=0`), pen press-and-hold right-click (`Wisp\Pen\SysEventParameters\HoldMode=3`), the legacy multi-touch/inking toggle (`Wisp\MultiTouch\MultiTouchEnabled=0`), and edge swipes (`EdgeUI\AllowEdgeSwipe=0`). Idempotent.
+- Output notes are explicit that gesture suppression is driver-dependent and that true hardware single-touch is enforced by the digitiser driver, not Windows.
+
 ## v1.4 — 2026-06-29
 
 ### Added — KDS terminal type
