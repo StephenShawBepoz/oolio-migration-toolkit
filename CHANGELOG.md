@@ -18,7 +18,7 @@ All notable changes to the Oolio Migration Toolkit. Newest first.
 ### Changed
 - Favicon (inline data-URI, Oolio purple) — kills the `/favicon.ico` 404 noise in every session log.
 - README gains a screenshots section; OVERVIEW updated for KDS in the type table, module 3/4 applicability, and honest zip-size numbers (~35 MB with the bundled installer).
-- **"Send feedback" mailto link** now appears in the app header on every view (migrate, module, type-selection) for easy user feedback submission to stephen.shaw@oolio.com.
+- **Feedback email display** in the app header on every view (migrate, module, type-selection) shows `stephen.shaw@oolio.com` in plain text. POS terminals won't have mail clients, so technicians can note and email the address manually from their own device.
 
 ## v1.5 — 2026-07-08
 
