@@ -1,111 +1,5 @@
 # dependencies.ps1 - Module 3: Oolio Dependencies step functions
 
-function Invoke-DepsCheckChrome {
-    Write-Section "Checking Google Chrome"
-
-    $isAdmin = ([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
-    if (-not $isAdmin) {
-        Write-Log "This step requires administrator privileges. Please restart the toolkit as Administrator (right-click Launch.ps1 -> Run as administrator)." "ERROR"
-        return
-    }
-
-    $chromePath    = "C:\Program Files\Google\Chrome\Application\chrome.exe"
-    $chromePathx86 = "C:\Program Files (x86)\Google\Chrome\Application\chrome.exe"
-
-    if (Test-Path $chromePath) {
-        $ver = (Get-Item $chromePath).VersionInfo.FileVersion
-        Write-Log "Chrome found at: $chromePath" "OK"
-        Write-Log "Version: $ver"
-        return
-    }
-    if (Test-Path $chromePathx86) {
-        $ver = (Get-Item $chromePathx86).VersionInfo.FileVersion
-        Write-Log "Chrome found at: $chromePathx86" "OK"
-        Write-Log "Version: $ver"
-        return
-    }
-
-    Write-Log "Chrome not found. Downloading enterprise installer..." "WARN"
-
-    $msiUrl  = "https://dl.google.com/dl/chrome/install/googlechromestandaloneenterprise64.msi"
-    $msiPath = Join-Path $env:TEMP "googlechromestandaloneenterprise64.msi"
-    $logPath = Join-Path $env:TEMP "chrome-install.log"
-
-    Write-Log "Source: $msiUrl"
-    if (-not (Invoke-DownloadWithHeartbeat -Url $msiUrl -OutFile $msiPath -ProgressLabel "Downloading Google Chrome")) {
-        Write-Log "The terminal needs internet at this point. Re-run when connectivity is available." "WARN"
-        return
-    }
-
-    if (-not (Test-InstallerSignature -Path $msiPath -ExpectedSubjectLike "*Google LLC*")) {
-        Write-Log "Refusing to run unverified installer. The downloaded MSI may be corrupt or tampered with." "ERROR"
-        Remove-Item -Path $msiPath -Force -ErrorAction SilentlyContinue
-        return
-    }
-
-    Write-Log "Installing silently (msiexec /i /qn /norestart)..."
-    $proc = Start-Process -FilePath "msiexec.exe" -ArgumentList @("/i", "`"$msiPath`"", "/qn", "/norestart", "/l*v", "`"$logPath`"") -PassThru -NoNewWindow
-    Wait-ProcessWithHeartbeat -Process $proc -Label "Installing Chrome (msiexec)"
-    $proc.WaitForExit()
-    $exitCode = $null
-    try { $exitCode = $proc.ExitCode } catch {}
-    Write-Log "msiexec exit code: $(if ($null -eq $exitCode) { '(null - process handle lost)' } else { $exitCode })"
-
-    # The Chrome enterprise MSI extracts a mini_installer.exe and launches it, then
-    # reports success. mini_installer.exe continues running in the background and
-    # writes chrome.exe to Program Files after the MSI process exits. Poll for up
-    # to 3 minutes rather than using a fixed sleep.
-    Write-Log "Waiting for Chrome to appear on disk (mini_installer may still be running)..."
-    $pollDeadline = (Get-Date).AddMinutes(3)
-    $start        = Get-Date
-    $lastLog      = $start
-    $chromeFound  = $false
-    while ((Get-Date) -lt $pollDeadline -and -not $chromeFound) {
-        $chromeFound = (Test-Path $chromePath) -or (Test-Path $chromePathx86)
-        if (-not $chromeFound) {
-            $now = Get-Date
-            if (($now - $lastLog).TotalSeconds -ge 10) {
-                $elapsed = [int]($now - $start).TotalSeconds
-                Write-Log "Still waiting for chrome.exe... (${elapsed}s)"
-                $lastLog = $now
-            }
-            Start-Sleep -Seconds 2
-        }
-    }
-
-    # msiexec success codes: 0 = success, 3010 = success (restart required),
-    # 1641 = success (restart initiated), 1638 = newer version already present.
-    $msiSuccessCodes = @(0, 3010, 1641, 1638)
-
-    if ($chromeFound) {
-        $verPath = if (Test-Path $chromePath) { $chromePath } else { $chromePathx86 }
-        $ver = (Get-Item $verPath).VersionInfo.FileVersion
-        Write-Log "Chrome installed and verified: $verPath version $ver" "OK"
-        if ($exitCode -notin $msiSuccessCodes) {
-            Write-Log "Note: msiexec exit code was $exitCode (non-standard but Chrome is present)." "WARN"
-        }
-    } else {
-        Write-Log "Chrome was not found on disk after 3 minutes." "ERROR"
-        Write-Log "Common msiexec codes: 1618 = another installer running; 1619 = MSI could not be opened; 1603 = fatal error." "WARN"
-        if (Test-Path $logPath) {
-            Write-Log "--- MSI install log (last 30 lines) ---" "WARN"
-            $tail = Get-Content $logPath -Tail 30 -ErrorAction SilentlyContinue
-            foreach ($line in $tail) {
-                # Only flag lines with genuine failure indicators, not lines that
-                # merely contain the word 'error' in a success message.
-                if ($line -match 'return value 3|Installation failed|Error 1[0-9]{3}' ) {
-                    Write-Log $line "ERROR"
-                } elseif ($line.Trim().Length -gt 0) {
-                    Write-Log $line
-                }
-            }
-            Remove-Item -Path $logPath -Force -ErrorAction SilentlyContinue
-        }
-    }
-
-    Remove-Item -Path $msiPath -Force -ErrorAction SilentlyContinue
-}
-
 function Invoke-DepsInstallTeamViewer {
     Write-Section "Installing TeamViewer (full version)"
 
@@ -148,29 +42,44 @@ function Invoke-DepsInstallTeamViewer {
     Write-Log "Installing silently (/S)..."
     $proc = Start-Process -FilePath $installer -ArgumentList "/S" -PassThru -NoNewWindow
     Wait-ProcessWithHeartbeat -Process $proc -Label "Installing TeamViewer"
+    $proc.WaitForExit()
+    $exitCode = $null
+    try { $exitCode = $proc.ExitCode } catch {}
+    Write-Log "Installer exit code: $(if ($null -eq $exitCode) { '(null - process handle lost)' } else { $exitCode })"
 
-    # Give the TeamViewer background service installer a moment to finish writing
-    # files after the outer process exits.
-    Start-Sleep -Seconds 5
-
-    $tvFound = $false
-    foreach ($p in $tvPaths) {
-        if (Test-Path $p) {
-            $ver = (Get-Item $p).VersionInfo.FileVersion
-            Write-Log "TeamViewer installed and verified: $p version $ver" "OK"
-            $tvFound = $true
-            break
+    # The TeamViewer /S installer launches a background service installer and exits
+    # before TeamViewer.exe is fully written to Program Files. Poll for up to 3
+    # minutes rather than using a fixed sleep, matching the Chrome/EpsonNet pattern.
+    Write-Log "Waiting for TeamViewer to appear on disk..."
+    $pollDeadline = (Get-Date).AddMinutes(3)
+    $start        = Get-Date
+    $lastLog      = $start
+    $tvFound      = $false
+    $foundPath    = $null
+    while ((Get-Date) -lt $pollDeadline -and -not $tvFound) {
+        foreach ($p in $tvPaths) {
+            if (Test-Path $p) { $tvFound = $true; $foundPath = $p; break }
+        }
+        if (-not $tvFound) {
+            $now = Get-Date
+            if (($now - $lastLog).TotalSeconds -ge 10) {
+                $elapsed = [int]($now - $start).TotalSeconds
+                Write-Log "Still waiting for TeamViewer.exe... (${elapsed}s)"
+                $lastLog = $now
+            }
+            Start-Sleep -Seconds 2
         }
     }
 
-    if (-not $tvFound) {
-        if ($proc.ExitCode -eq 0) {
-            Write-Log "Installer exited cleanly but TeamViewer.exe was not found. It may still be installing - check Program Files in a moment." "WARN"
-        } else {
-            Write-Log "TeamViewer installer exited with code $($proc.ExitCode) and TeamViewer.exe was not found on disk." "ERROR"
+    if ($tvFound) {
+        $ver = (Get-Item $foundPath).VersionInfo.FileVersion
+        Write-Log "TeamViewer installed and verified: $foundPath version $ver" "OK"
+        if ($null -ne $exitCode -and $exitCode -ne 0) {
+            Write-Log "Note: installer exit code was $exitCode (non-standard but TeamViewer is present)." "WARN"
         }
-    } elseif ($proc.ExitCode -ne 0) {
-        Write-Log "Note: installer exit code was $($proc.ExitCode) (non-standard but TeamViewer is present)." "WARN"
+    } else {
+        Write-Log "TeamViewer.exe was not found on disk after 3 minutes (exit code $exitCode)." "ERROR"
+        Write-Log "Check Programs and Features, or install TeamViewer manually. Antivirus can also block the silent install." "WARN"
     }
 
     Remove-Item -Path $installer -Force -ErrorAction SilentlyContinue

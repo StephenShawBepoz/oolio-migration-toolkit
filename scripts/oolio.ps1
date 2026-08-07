@@ -27,7 +27,7 @@ function Invoke-OolioInstallPOSChrome {
 
     $chromePath = Get-ChromePath
     if (-not $chromePath) {
-        Write-Log "Chrome not found. Install Chrome in the dependencies module first." "ERROR"
+        Write-Log "Chrome not found. Install Google Chrome on this device, then re-run this step." "ERROR"
         return
     }
 
@@ -61,7 +61,7 @@ function Invoke-OolioInstallCDSChrome {
 
     $chromePath = Get-ChromePath
     if (-not $chromePath) {
-        Write-Log "Chrome not found. Install Chrome in the dependencies module first." "ERROR"
+        Write-Log "Chrome not found. Install Google Chrome on this device, then re-run this step." "ERROR"
         return
     }
 
@@ -97,7 +97,7 @@ function Invoke-OolioInstallKDSChrome {
 
     $chromePath = Get-ChromePath
     if (-not $chromePath) {
-        Write-Log "Chrome not found. Install Chrome in the dependencies module first." "ERROR"
+        Write-Log "Chrome not found. Install Google Chrome on this device, then re-run this step." "ERROR"
         return
     }
 

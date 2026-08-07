@@ -57,6 +57,8 @@ const MODULES = [
               note: 'Turns off OneDrive sync prompts, Windows Spotlight, Cortana, news/widgets, Edge first-run, Microsoft Account sign-in nag, and other consumer-friendly prompts that get in the way on a dedicated terminal. Idempotent - safe to re-run.' },
             { id: 'touch-input',      title: 'Configure touch keyboard & disable edge swipes', risk: 'warn', showInTypes: ['ST','T','KDS'],
               note: 'Enables touch keyboard auto-invoke when a text field is tapped. Ensures the Touch Keyboard service is running and set to Automatic. On Windows 10 touch devices, enables Tablet Mode to improve auto-invoke reliability. Disables edge swipe gestures (Action Center swipe-right, Task View swipe-left) to prevent accidental activation during a transaction.' },
+            { id: 'usb-power',        title: 'Disable USB / serial port power saving', risk: 'warn', showInTypes: ['ST','T','KDS'],
+              note: 'Stops Windows powering down USB and serial/COM devices to save energy - the usual cause of printers, cash drawers, and scanners "dropping off" during a shift. Disables USB selective suspend in the active power plan and clears the "allow the computer to turn off this device" checkbox on every present USB and COM device. Re-run after adding new peripherals.' },
             { id: 'check-ip',         title: 'Check IP configuration', risk: 'safe', showInTypes: ['S','ST','T','KDS'], note: 'Shows current IP and DHCP status for every active adapter. If a static IP is detected, the migrate flow surfaces a "Switch to DHCP" prompt as an inline action.' },
             { id: 'rename-device',    title: 'Rename device', risk: 'warn', showInTypes: ['S','ST','T','KDS'], optional: true,
               requiresInputs: [{ name: 'value', label: 'Suffix (after "Oolio-")', placeholder: 'POS1', prefix: 'Oolio-' }],
@@ -69,10 +71,9 @@ const MODULES = [
         id: 'dependencies',
         name: 'Oolio Dependencies',
         icon: '3',
-        description: 'Verify or install Chrome and WebView2, plus printer utility links.',
+        description: 'Verify or install WebView2 and TeamViewer, plus printer utilities.',
         showInTypes: ['ST', 'KDS'],
         steps: [
-            { id: 'check-chrome',          title: 'Check / install Google Chrome',    risk: 'safe', showInTypes: ['ST','KDS'], note: 'Reports Chrome install path and version. If Chrome is missing, downloads the Google Enterprise MSI and installs it silently (msiexec /qn). Requires internet at this step.' },
             { id: 'check-webview2',        title: 'Check / install Edge WebView2',    risk: 'safe', showInTypes: ['ST','KDS'], note: 'Required for Windows native Oolio apps. If missing, downloads the Microsoft Evergreen Bootstrapper and installs silently (/silent /install). Requires internet at this step.' },
             { id: 'teamviewer',            title: 'Check / install TeamViewer',       risk: 'safe', showInTypes: ['ST','KDS'], note: 'Reports TeamViewer install path and version. If missing, downloads the full TeamViewer installer (TeamViewer_Setup_x64.exe) and installs silently with /S. Requires internet at this step.' },
             { id: 'check-epsonnet-config', title: 'Check / install EpsonNet Config',  risk: 'safe', showInTypes: ['ST'],       note: 'Network configuration utility for Epson printers. Detects if already installed via known paths and registry. If missing, downloads ENCU from ftp.epson.com, verifies the Epson signature, and installs silently. Requires internet at this step.' }
@@ -501,8 +502,8 @@ async function runBepozSafeChain() {
 }
 
 async function runDepsCheckChain() {
-    await runStep('dependencies', 'check-chrome');
     await runStep('dependencies', 'check-webview2');
+    await runStep('dependencies', 'teamviewer');
 }
 
 // ---------- Rendering ----------
@@ -1043,7 +1044,7 @@ function renderModule() {
     } else if (mod.id === 'dependencies') {
         autoRunBar = `
           <div class="auto-run-bar">
-            <div class="auto-run-bar-text">Check Chrome and WebView2 in sequence.</div>
+            <div class="auto-run-bar-text">Check WebView2 and TeamViewer in sequence.</div>
             <button class="btn-primary" id="deps-chain" ${state.runningStep ? 'disabled' : ''}>Check dependencies</button>
           </div>`;
     }

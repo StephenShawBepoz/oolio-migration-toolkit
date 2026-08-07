@@ -38,13 +38,13 @@ function Get-DefaultProgress {
             "active-hours"     = "pending"
             "harden-pos"       = "pending"
             "touch-input"      = "pending"
+            "usb-power"        = "pending"
             "check-ip"         = "pending"
             "rename-device"    = "pending"
             "clean-desktop"    = "pending"
             "set-wallpaper"    = "pending"
         }
         dependencies = @{
-            "check-chrome"          = "pending"
             "check-webview2"        = "pending"
             "teamviewer"            = "pending"
             "check-epsonnet-config" = "pending"

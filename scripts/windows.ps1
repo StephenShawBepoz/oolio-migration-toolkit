@@ -329,6 +329,89 @@ function Invoke-WindowsTouchInput {
     Write-Log "Sign out and back in (or reboot) for HKCU changes to take effect." "WARN"
 }
 
+function Invoke-WindowsUsbPower {
+    Write-Section "Disabling power saving on USB and serial/COM ports"
+
+    $isAdmin = ([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
+    if (-not $isAdmin) {
+        Write-Log "This step requires administrator privileges. Please restart the toolkit as Administrator (right-click Launch.ps1 -> Run as administrator)." "ERROR"
+        return
+    }
+
+    # 1. Disable "USB selective suspend" in the active power plan (AC + DC).
+    #    SUB_USB subgroup GUID and USBSELECTIVESUSPEND setting GUID are stable
+    #    across Windows 10/11.
+    Write-Log "Disabling USB selective suspend in the active power plan..."
+    $subUsb    = "2a737441-1930-4402-8d77-b2bebba308a3"
+    $usbSusp   = "48e6b7a6-50f5-4782-a5d4-53bb8f07e226"
+    try {
+        & powercfg /setacvalueindex SCHEME_CURRENT $subUsb $usbSusp 0 2>&1 | Out-Null
+        & powercfg /setdcvalueindex SCHEME_CURRENT $subUsb $usbSusp 0 2>&1 | Out-Null
+        & powercfg /setactive SCHEME_CURRENT 2>&1 | Out-Null
+        Write-Log "USB selective suspend disabled (plugged in and on battery)." "OK"
+    } catch {
+        Write-Log "Could not update the power plan: $($_.Exception.Message)" "WARN"
+    }
+
+    # 2. Clear "Allow the computer to turn off this device to save power" on every
+    #    USB and serial/COM device. This checkbox is exposed through the
+    #    MSPower_DeviceEnable WMI class in root\wmi; Enable = $false means the OS
+    #    is NOT allowed to power the device down.
+    $targetClasses = @('USB', 'Ports')
+    $targets = @()
+    try {
+        $targets = @(Get-PnpDevice -PresentOnly -ErrorAction Stop |
+            Where-Object { $targetClasses -contains $_.Class })
+    } catch {
+        Write-Log "Could not enumerate PnP devices: $($_.Exception.Message)" "WARN"
+    }
+    Write-Log "Found $($targets.Count) present USB / serial device(s)."
+
+    # Index target device instance IDs (upper-cased) for fast matching.
+    $targetIds = @{}
+    foreach ($t in $targets) {
+        if ($t.InstanceId) { $targetIds[$t.InstanceId.ToUpper()] = $t.FriendlyName }
+    }
+
+    $pmObjects = @()
+    try {
+        $pmObjects = @(Get-WmiObject -Namespace root\wmi -Class MSPower_DeviceEnable -ErrorAction Stop)
+    } catch {
+        Write-Log "Could not read device power settings (MSPower_DeviceEnable): $($_.Exception.Message)" "WARN"
+    }
+
+    $changed = 0
+    foreach ($pm in $pmObjects) {
+        # MSPower InstanceName ends with an enumeration suffix like "_0"; strip it
+        # to match the PnP InstanceId.
+        $inst = ($pm.InstanceName -replace '_\d+$','').ToUpper()
+        if ($targetIds.ContainsKey($inst)) {
+            $name = $targetIds[$inst]
+            if ($pm.Enable -ne $false) {
+                try {
+                    $pm.Enable = $false
+                    $pm.Put() | Out-Null
+                    Write-Log "Disabled power-off for: $name" "OK"
+                    $changed++
+                } catch {
+                    Write-Log "Could not update '$name': $($_.Exception.Message)" "WARN"
+                }
+            }
+        }
+    }
+
+    if ($pmObjects.Count -eq 0) {
+        Write-Log "No power-manageable devices reported. Nothing to change." "WARN"
+    } elseif ($changed -eq 0) {
+        Write-Log "All USB / serial devices already have power saving disabled." "OK"
+    } else {
+        Write-Log "Disabled 'allow the computer to turn off this device' on $changed device(s)." "OK"
+    }
+
+    Write-Log "USB and serial/COM power saving configuration complete." "OK"
+    Write-Log "Newly connected devices inherit the plan-level USB selective suspend setting; re-run this step after adding peripherals to also clear their per-device checkbox." "WARN"
+}
+
 function Invoke-WindowsHardenPOS {
     Write-Section "Hardening Windows for POS use"
     Write-Log "Disabling consumer-friendly nags (OneDrive sync prompts, Spotlight, Cortana, news/widgets, Edge first-run, etc.)"

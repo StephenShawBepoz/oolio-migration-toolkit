@@ -20,6 +20,7 @@ function Get-StepFunctionName {
             "active-hours"     = "Invoke-WindowsActiveHours"
             "harden-pos"       = "Invoke-WindowsHardenPOS"
             "touch-input"      = "Invoke-WindowsTouchInput"
+            "usb-power"        = "Invoke-WindowsUsbPower"
             "check-ip"         = "Invoke-WindowsCheckIP"
             "switch-dhcp"      = "Invoke-WindowsSwitchDHCP"
             "rename-device"    = "Invoke-WindowsRenameDevice"
@@ -27,7 +28,6 @@ function Get-StepFunctionName {
             "set-wallpaper"    = "Invoke-WindowsSetWallpaper"
         }
         "dependencies" = @{
-            "check-chrome"          = "Invoke-DepsCheckChrome"
             "check-webview2"        = "Invoke-DepsCheckWebView2"
             "teamviewer"            = "Invoke-DepsInstallTeamViewer"
             "check-epsonnet-config" = "Invoke-DepsCheckEpsonNetConfig"
