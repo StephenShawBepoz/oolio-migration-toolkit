@@ -8,6 +8,24 @@
 
 ---
 
+> **This is the original design spec, not a live reference.** The shipped toolkit
+> has moved on from it. Where this document and the code disagree, **the code in
+> `scripts/`, `server/`, and `ui/app.js` is the source of truth.**
+>
+> Known drift, so nothing here gets rebuilt by mistake:
+> - Steps documented below that were never built or have been removed:
+>   `kill-processes`, `uninstall`, `printer-utilities`, `install-certs`,
+>   `check-chrome`, `verify-autologon`, `rename-device`.
+> - Chrome is no longer installed by the toolkit — it is assumed to be on the
+>   device image.
+> - Autologon is no longer configured by the toolkit. `set-startup` reports its
+>   state read-only; it is expected to be set on the image.
+> - Shortcuts use Chrome app mode (`--app=... --start-fullscreen`), not `--kiosk`.
+> - Terminal types are `S`, `ST`, `T`, `KDS`, `ALL` — not the `POS` value shown
+>   in the `meta` sample below.
+
+---
+
 ## 1. Overview
 
 A technician copies a single folder to a Windows POS terminal and runs one PowerShell script. That script starts a lightweight HTTP server on localhost and opens a browser to a polished web UI. The technician works through four modules, each containing steps with live script execution, streaming output, and persistent progress tracking across sessions.
@@ -448,34 +466,9 @@ function Invoke-BepozUninstall {
 
 ### Step execution rules
 
-Steps run individually. No auto-chain in this module — each step has meaningful decision points. The device rename step requires text input from the technician before it can execute. The IP switch step is conditional — skip silently if already DHCP.
+Steps run individually. No auto-chain in this module — each step has meaningful decision points. The active-hours step takes an optional hour from the technician (defaults to 3am). The IP switch step is conditional — skip silently if already DHCP.
 
 ### Step definitions
-
-**Step ID: `verify-autologon`**  
-Risk: safe
-
-```powershell
-function Invoke-WindowsVerifyAutologon {
-    Write-Section "Verifying autologon configuration"
-    
-    $winlogonPath = "HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Winlogon"
-    $autoAdmin = (Get-ItemProperty -Path $winlogonPath -Name AutoAdminLogon -ErrorAction SilentlyContinue).AutoAdminLogon
-    $defaultUser = (Get-ItemProperty -Path $winlogonPath -Name DefaultUserName -ErrorAction SilentlyContinue).DefaultUserName
-    $defaultDomain = (Get-ItemProperty -Path $winlogonPath -Name DefaultDomainName -ErrorAction SilentlyContinue).DefaultDomainName
-    
-    Write-Log "AutoAdminLogon: $autoAdmin"
-    Write-Log "DefaultUserName: $defaultUser"
-    Write-Log "DefaultDomainName: $defaultDomain"
-    
-    if ($autoAdmin -eq "1") {
-        Write-Log "Autologon is active. Terminal will boot directly to user: $defaultUser" "OK"
-    } else {
-        Write-Log "Autologon is NOT active. Terminal will show login screen on reboot." "ERROR"
-        Write-Log "Autologon must be restored before the final restart. Set AutoAdminLogon=1 in the Winlogon registry key." "WARN"
-    }
-}
-```
 
 **Step ID: `enable-firewall`**  
 Risk: warn
@@ -547,42 +540,6 @@ function Invoke-WindowsSwitchDHCP {
             Write-Log "  $($_.InterfaceAlias): $($_.IPv4Address.IPAddress)"
         }
     }
-}
-```
-
-**Step ID: `rename-device`**  
-Risk: warn — requires text input from UI  
-Input parameter: `terminalName` (the suffix after "Oolio-", e.g. "POS1")
-
-```powershell
-function Invoke-WindowsRenameDevice {
-    param([string]$terminalName)
-    
-    Write-Section "Renaming device"
-    
-    if (-not $terminalName -or $terminalName.Trim() -eq "") {
-        Write-Log "No terminal name provided. Cannot rename." "ERROR"
-        return
-    }
-    
-    # Sanitise input — alphanumeric and hyphens only, max 12 chars for the suffix
-    $clean = $terminalName.Trim() -replace '[^a-zA-Z0-9\-]', '' 
-    if ($clean.Length -gt 12) { $clean = $clean.Substring(0, 12) }
-    
-    $newName = "Oolio-$clean"
-    $currentName = $env:COMPUTERNAME
-    
-    Write-Log "Current device name: $currentName"
-    Write-Log "New device name: $newName"
-    
-    if ($currentName -eq $newName) {
-        Write-Log "Device is already named $newName. No change needed." "OK"
-        return
-    }
-    
-    Rename-Computer -NewName $newName -Force -ErrorAction Stop
-    Write-Log "Device renamed to $newName." "OK"
-    Write-Log "This change will take effect after the final restart at the end of the toolkit." "WARN"
 }
 ```
 
@@ -659,36 +616,9 @@ public class Wallpaper {
 
 ### Step execution rules
 
-Steps 1 and 2 (Chrome, WebView2) can auto-chain. Steps 3 and 4 run individually.
+WebView2 and TeamViewer can auto-chain. The remaining steps run individually. Google Chrome is assumed to be present on the device image — the toolkit no longer installs it.
 
 ### Step definitions
-
-**Step ID: `check-chrome`**  
-Risk: safe
-
-```powershell
-function Invoke-DepsCheckChrome {
-    Write-Section "Checking Google Chrome"
-    
-    $chromePath = "C:\Program Files\Google\Chrome\Application\chrome.exe"
-    $chromePathx86 = "C:\Program Files (x86)\Google\Chrome\Application\chrome.exe"
-    
-    if (Test-Path $chromePath) {
-        $ver = (Get-Item $chromePath).VersionInfo.FileVersion
-        Write-Log "Chrome found at: $chromePath" "OK"
-        Write-Log "Version: $ver"
-    } elseif (Test-Path $chromePathx86) {
-        $ver = (Get-Item $chromePathx86).VersionInfo.FileVersion
-        Write-Log "Chrome found at: $chromePathx86" "OK"
-        Write-Log "Version: $ver"
-    } else {
-        Write-Log "Chrome not found on this terminal." "WARN"
-        Write-Log "Download and install Chrome before running Chrome-mode deployments."
-        Start-Process "https://www.google.com/chrome/"
-        Write-Log "Chrome download page opened in browser."
-    }
-}
-```
 
 **Step ID: `check-webview2`**  
 Risk: safe
@@ -819,7 +749,7 @@ Risk: safe — Chrome mode only
 
 ```powershell
 function Invoke-OolioInstallPOSChrome {
-    Write-Section "Creating Oolio POS Chrome kiosk shortcut"
+    Write-Section "Creating Oolio POS Chrome shortcut"
     
     $chromePath = "C:\Program Files\Google\Chrome\Application\chrome.exe"
     if (-not (Test-Path $chromePath)) {
@@ -834,12 +764,12 @@ function Invoke-OolioInstallPOSChrome {
     $shell = New-Object -ComObject WScript.Shell
     $shortcut = $shell.CreateShortcut($shortcutPath)
     $shortcut.TargetPath = $chromePath
-    $shortcut.Arguments = "--kiosk https://pos.oolio.io --no-first-run --disable-infobars"
+    $shortcut.Arguments = "--app=https://pos.oolio.io --start-fullscreen --no-first-run --disable-infobars --disable-pinch"
     $shortcut.WindowStyle = 3
     $shortcut.Save()
     
     Write-Log "Shortcut created: $shortcutPath" "OK"
-    Write-Log "Launches pos.oolio.io in fullscreen kiosk mode."
+    Write-Log "Launches pos.oolio.io fullscreen (app mode). Exit: Windows key or Alt+F4."
 }
 ```
 
@@ -848,7 +778,7 @@ Risk: safe — only shown if CDS is present
 
 ```powershell
 function Invoke-OolioInstallCDSChrome {
-    Write-Section "Creating Oolio CDS Chrome kiosk shortcut"
+    Write-Section "Creating Oolio CDS Chrome shortcut"
     
     $chromePath = "C:\Program Files\Google\Chrome\Application\chrome.exe"
     if (-not (Test-Path $chromePath)) {
@@ -861,7 +791,7 @@ function Invoke-OolioInstallCDSChrome {
     $shortcut.TargetPath = $chromePath
     # --window-position=1920,0 places it on the second display assuming 1920px primary
     # Technician should verify primary display resolution and adjust if needed
-    $shortcut.Arguments = "--kiosk https://cds.oolio.io --no-first-run --disable-infobars --window-position=1920,0"
+    $shortcut.Arguments = "--app=https://cds.oolio.io --start-fullscreen --no-first-run --disable-infobars --disable-pinch --window-position=1920,0"
     $shortcut.WindowStyle = 3
     $shortcut.Save()
     
@@ -876,7 +806,7 @@ Risk: safe — KDS terminals only
 
 ```powershell
 function Invoke-OolioInstallKDSChrome {
-    Write-Section "Creating Oolio KDS Chrome kiosk shortcut"
+    Write-Section "Creating Oolio KDS Chrome shortcut"
     
     $chromePath = "C:\Program Files\Google\Chrome\Application\chrome.exe"
     if (-not (Test-Path $chromePath)) {
@@ -887,7 +817,7 @@ function Invoke-OolioInstallKDSChrome {
     $shell = New-Object -ComObject WScript.Shell
     $shortcut = $shell.CreateShortcut($shortcutPath)
     $shortcut.TargetPath = $chromePath
-    $shortcut.Arguments = "--kiosk https://kds.oolio.io --no-first-run --disable-infobars"
+    $shortcut.Arguments = "--app=https://kds.oolio.io --start-fullscreen --no-first-run --disable-infobars --disable-pinch"
     $shortcut.WindowStyle = 3
     $shortcut.Save()
     
@@ -1016,7 +946,7 @@ Each step renders:
 2. Step body (shown when expanded):
    - Note text
    - Links list (if step has links)
-   - Input field (if step requires input — e.g. rename-device needs terminal name)
+   - Input field (if step requires input — e.g. active-hours takes an update hour)
    - Run button (if step has a script) — triggers SSE execution
    - Output log area (shown during and after execution — monospace, dark background, scrollable, auto-scrolls to bottom)
    - Mark done / Skip buttons
@@ -1037,7 +967,7 @@ Module 1 (Bepoz) has a "Run safe steps" button at the top of the module that cha
 After those complete, remaining steps run individually.
 
 Module 3 (Dependencies) has a "Check dependencies" button that chains:
-`check-chrome` → `check-webview2`
+`check-webview2` → `teamviewer`
 
 #### SSE output handling
 
@@ -1156,7 +1086,7 @@ These must be preserved in implementation:
 
 3. **SQL may not be local.** The `stop-sql` step must check whether the service exists on this terminal before attempting to stop it. If not found, log a warning and skip — do not error.
 
-4. **Autologon must survive.** The Bepoz registry cleanup deletes `HKCU\Software\Backoffice` only. It must never touch `HKLM\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Winlogon`. The verify-autologon step confirms this is intact after cleanup.
+4. **Autologon must survive.** The Bepoz registry cleanup deletes `HKCU\Software\Backoffice` only. It must never touch `HKLM\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Winlogon`. The set-startup step reports (read-only) whether autologon is still intact after cleanup.
 
 5. **Desktop is safe to wipe.** This is a POS terminal. Remove everything from user and public desktop. The Oolio shortcut is placed by the setup module.
 

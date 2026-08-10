@@ -47,7 +47,7 @@ function Invoke-OolioInstallPOSChrome {
     $shell    = New-Object -ComObject WScript.Shell
     $shortcut = $shell.CreateShortcut($shortcutPath)
     $shortcut.TargetPath  = $chromePath
-    $shortcut.Arguments   = "--app=https://pos.oolio.io --start-fullscreen --no-first-run --disable-infobars"
+    $shortcut.Arguments   = "--app=https://pos.oolio.io --start-fullscreen --no-first-run --disable-infobars --disable-pinch"
     $shortcut.WindowStyle = 3
     if ($iconSet) { $shortcut.IconLocation = "$iconPath,0" }
     $shortcut.Save()
@@ -82,7 +82,7 @@ function Invoke-OolioInstallCDSChrome {
     $shortcut = $shell.CreateShortcut($shortcutPath)
     $shortcut.TargetPath  = $chromePath
     # --window-position=1920,0 places it on the second display assuming 1920px primary
-    $shortcut.Arguments   = "--app=https://cds.oolio.io --start-fullscreen --no-first-run --disable-infobars --window-position=1920,0"
+    $shortcut.Arguments   = "--app=https://cds.oolio.io --start-fullscreen --no-first-run --disable-infobars --disable-pinch --window-position=1920,0"
     $shortcut.WindowStyle = 3
     if ($iconSet) { $shortcut.IconLocation = "$iconPath,0" }
     $shortcut.Save()
@@ -117,7 +117,7 @@ function Invoke-OolioInstallKDSChrome {
     $shell    = New-Object -ComObject WScript.Shell
     $shortcut = $shell.CreateShortcut($shortcutPath)
     $shortcut.TargetPath  = $chromePath
-    $shortcut.Arguments   = "--app=https://kds.oolio.io --start-fullscreen --no-first-run --disable-infobars"
+    $shortcut.Arguments   = "--app=https://kds.oolio.io --start-fullscreen --no-first-run --disable-infobars --disable-pinch"
     $shortcut.WindowStyle = 3
     if ($iconSet) { $shortcut.IconLocation = "$iconPath,0" }
     $shortcut.Save()
@@ -146,11 +146,25 @@ function Invoke-OolioSetStartup {
 
     if ($copied -eq 0) {
         Write-Log "No Oolio desktop shortcuts found to copy." "ERROR"
-        Write-Log "Run the install-pos-chrome / install-cds-chrome steps first." "WARN"
+        Write-Log "Run the install-pos-chrome / install-cds-chrome / install-kds-chrome steps first." "WARN"
         return
     }
 
     Write-Log "Oolio will launch automatically when the autologon user signs in."
+
+    # shell:startup only fires once someone signs in. If autologon is off the
+    # terminal stops at the login screen and nothing launches - report it here
+    # (read-only) so it is caught before go-live rather than at the next reboot.
+    $winlogonPath = "HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Winlogon"
+    $autoAdmin   = (Get-ItemProperty -Path $winlogonPath -Name AutoAdminLogon  -ErrorAction SilentlyContinue).AutoAdminLogon
+    $defaultUser = (Get-ItemProperty -Path $winlogonPath -Name DefaultUserName -ErrorAction SilentlyContinue).DefaultUserName
+    if ($autoAdmin -eq "1") {
+        Write-Log "Autologon is active - terminal boots straight to user '$defaultUser'." "OK"
+    } else {
+        Write-Log "Autologon is NOT enabled on this device." "WARN"
+        Write-Log "The terminal will stop at the login screen on reboot and Oolio will not start until someone signs in." "WARN"
+        Write-Log "Configure autologon on the device image, or enable it manually, before go-live." "WARN"
+    }
 
     # Tidy up any legacy HKCU Run entries from previous toolkit versions.
     $runPath = "HKCU:\Software\Microsoft\Windows\CurrentVersion\Run"
@@ -166,9 +180,9 @@ function Invoke-OolioSetStartup {
 function Invoke-OolioFinalRestart {
     Write-Section "Initiating final restart"
     Write-Log "The following changes require a restart to take effect:"
-    Write-Log "  - Device rename to Oolio-[name]"
+    Write-Log "  - Default browser policy (Microsoft Edge) and Internet Explorer removal"
+    Write-Log "  - Touch keyboard, pinch zoom, and edge swipe settings"
     Write-Log "  - Wallpaper settings"
-    Write-Log "  - Any autologon registry changes"
     Write-Log ""
     Write-Log "Restarting in 30 seconds. Run 'shutdown /a' in a command prompt to cancel."
     shutdown /r /t 30 /c "Oolio migration toolkit - applying final changes"

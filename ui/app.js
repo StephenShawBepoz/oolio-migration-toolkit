@@ -38,32 +38,25 @@ const MODULES = [
         id: 'windows',
         name: 'Windows Settings',
         icon: '2',
-        description: 'Verify autologon, firewall, network, then rename / clean the device.',
+        description: 'Firewall, default browser, touch, power, then clean the device.',
         showInTypes: ['S', 'ST', 'T', 'KDS'],
         steps: [
-            { id: 'verify-autologon', title: 'Verify & enable autologon', risk: 'warn', showInTypes: ['S','ST','T','KDS'],
-              requiresInputs: [
-                { name: 'username', label: 'Username', placeholder: 'e.g. POSUser' },
-                { name: 'password', label: 'Password', placeholder: '', type: 'password' },
-                { name: 'domain',   label: 'Domain (optional)', placeholder: 'leave blank for local machine' }
-              ],
-              note: 'Reads the Winlogon registry to confirm autologon. If autologon is off and you fill the form, the toolkit writes the autologon registry values. Password lands in plaintext at HKLM\\Software\\Microsoft\\Windows NT\\CurrentVersion\\Winlogon - standard AutoAdminLogon mechanism.'
-            },
-            { id: 'enable-firewall',  title: 'Enable Windows Firewall', risk: 'warn', showInTypes: ['S','ST','T','KDS'], note: 'Enables firewall for Domain, Private, and Public profiles.' },
+            { id: 'enable-firewall',  title: 'Firewall, Private network & sharing', risk: 'warn', showInTypes: ['S','ST','T','KDS'],
+              note: 'Turns the firewall on for Domain, Private, and Public profiles. Sets every active network to the Private profile (domain-authenticated networks are left alone - Windows owns that classification). Enables File and Printer Sharing plus Network Discovery on the Private profile only, and starts the Function Discovery services so shared printers are reachable.' },
+            { id: 'default-browser',  title: 'Set Microsoft Edge as default browser', risk: 'warn', showInTypes: ['S','ST','T','KDS'],
+              note: 'Enforces Edge as the default for http, https, .htm, .html and .pdf via the DefaultAssociationsConfiguration policy, which applies to every user at sign-in. Also redirects any Internet Explorer launch into Edge and disables the IE11 optional feature. Takes effect at the next sign-in.' },
             { id: 'active-hours',     title: 'Configure Windows Update active hours', risk: 'warn', showInTypes: ['S','ST','T','KDS'],
               requiresInputs: [{ name: 'value', label: 'Update window hour (24h, 0-23)', placeholder: '3' }],
               note: 'Locks Windows Update active hours via Group Policy. Updates only install in a 6-hour window centred on the supplied hour. Recommended: 3 (3am). Also clears NoAutoRebootWithLoggedOnUsers so the autologon user does not block reboots.' },
             { id: 'harden-pos',       title: 'Disable Windows nags / OneDrive / Spotlight', risk: 'warn', showInTypes: ['ST','T','KDS'],
               note: 'Turns off OneDrive sync prompts, Windows Spotlight, Cortana, news/widgets, Edge first-run, Microsoft Account sign-in nag, and other consumer-friendly prompts that get in the way on a dedicated terminal. Idempotent - safe to re-run.' },
-            { id: 'touch-input',      title: 'Configure touch keyboard & disable edge swipes', risk: 'warn', showInTypes: ['ST','T','KDS'],
-              note: 'Enables touch keyboard auto-invoke when a text field is tapped. Ensures the Touch Keyboard service is running and set to Automatic. On Windows 10 touch devices, enables Tablet Mode to improve auto-invoke reliability. Disables edge swipe gestures (Action Center swipe-right, Task View swipe-left) to prevent accidental activation during a transaction.' },
+            { id: 'touch-input',      title: 'Touch keyboard, pinch zoom & edge swipes', risk: 'warn', showInTypes: ['ST','T','KDS'],
+              note: 'Enables touch keyboard auto-invoke when a text field is tapped and ensures the Touch Keyboard service is running. On Windows 10 touch devices, enables Tablet Mode for reliability. Disables edge swipe gestures (Action Center, Task View) and two-finger pinch zoom across three layers: Chrome policy, precision touchpad, and touchscreen. Panning and tapping still work.' },
             { id: 'usb-power',        title: 'Disable USB / serial port power saving', risk: 'warn', showInTypes: ['ST','T','KDS'],
               note: 'Stops Windows powering down USB and serial/COM devices to save energy - the usual cause of printers, cash drawers, and scanners "dropping off" during a shift. Disables USB selective suspend in the active power plan and clears the "allow the computer to turn off this device" checkbox on every present USB and COM device. Re-run after adding new peripherals.' },
             { id: 'check-ip',         title: 'Check IP configuration', risk: 'safe', showInTypes: ['S','ST','T','KDS'], note: 'Shows current IP and DHCP status for every active adapter. If a static IP is detected, the migrate flow surfaces a "Switch to DHCP" prompt as an inline action.' },
-            { id: 'rename-device',    title: 'Rename device', risk: 'warn', showInTypes: ['S','ST','T','KDS'], optional: true,
-              requiresInputs: [{ name: 'value', label: 'Suffix (after "Oolio-")', placeholder: 'POS1', prefix: 'Oolio-' }],
-              note: 'Optional. Renames the device to Oolio-<suffix>. Skip if the device is already correctly named. Effective after the final restart.' },
-            { id: 'clean-desktop',    title: 'Clean desktop',      risk: 'warn', showInTypes: ['ST','KDS'], note: 'Removes everything from user and public desktop.' },
+            { id: 'clean-desktop',    title: 'Remove Bepoz apps from desktop, taskbar & Start', risk: 'warn', showInTypes: ['ST','T','KDS'],
+              note: 'Removes Bepoz shortcuts from both desktops, the Start menu (recursive, including empty Bepoz folders), and taskbar pins. Matches on shortcut name and on where the shortcut points, so renamed shortcuts are still caught. Non-Bepoz shortcuts are left untouched. Restarts Explorer if any taskbar pin was removed.' },
             { id: 'set-wallpaper',    title: 'Apply Oolio wallpaper', risk: 'safe', showInTypes: ['ST','KDS'], note: 'Copies assets/wallpaper.jpg to C:\\Oolio\\Assets and applies it.' }
         ]
     },
@@ -215,7 +208,7 @@ function setStepStatus(moduleId, stepId, status) {
 //
 // Walks every module's visible steps in order and classifies each pending step as:
 //   - auto-run   : safe enough to run unattended in the migrate loop
-//   - pause-form : needs technician input via inputs (verify-autologon, rename-device)
+//   - pause-form : needs technician input via inputs (active-hours)
 //   - pause-config: terminal-type configuration form
 //   - pause-manual: link-only step that needs the technician to do something off-script
 //   - pause-confirm: danger step requiring a confirmation tick before running
@@ -247,17 +240,6 @@ function getNextMigrateAction() {
 }
 
 function getStepExtras(stepId) {
-    if (stepId === 'rename-device') {
-        return { value: state.inputValues['windows.rename-device.value'] || '' };
-    }
-    if (stepId === 'verify-autologon') {
-        const k = 'windows.verify-autologon';
-        return {
-            username: state.inputValues[k + '.username'] || '',
-            password: state.inputValues[k + '.password'] || '',
-            domain:   state.inputValues[k + '.domain']   || ''
-        };
-    }
     if (stepId === 'active-hours') {
         // Default to 3 (3am) when the tech leaves the field blank.
         return { value: state.inputValues['windows.active-hours.value'] || '3' };
@@ -682,15 +664,10 @@ function renderPauseCard(action) {
     }
 
     // pause-form / pause-confirm: show inputs and / or danger checkbox, then Run & continue.
+    // Every remaining input is optional (active-hours defaults to 3), so the Run
+    // button is gated only on the danger confirmation.
     const inputs = step.requiresInputs || [];
-    const requiredFieldsFilled = inputs.every(inp => {
-        if (action.stepId === 'rename-device' && inp.name === 'value') {
-            const v = state.inputValues[key + '.' + inp.name] || '';
-            return v.trim().length > 0;
-        }
-        return true;
-    });
-    const runDisabled = (isDanger && !confirmed) || !requiredFieldsFilled;
+    const runDisabled = (isDanger && !confirmed);
 
     const inputHtml = inputs.length > 0 ? `
       <div class="step-inputs">
@@ -862,7 +839,7 @@ function updateProgressBar(moduleId, stepId, payload) {
 }
 
 // Append a single output line to the live log without re-rendering the whole UI.
-// Re-rendering on every SSE line was eating keystrokes in the rename-device input
+// Re-rendering on every SSE line was eating keystrokes in text inputs
 // and resetting scroll position. This appends directly to the existing DOM node;
 // state.outputLog still accumulates so a later full render reproduces the same view.
 function appendOutputLine(moduleId, stepId, line) {
@@ -948,15 +925,8 @@ function renderStep(moduleDef, step, index) {
             const isDanger = step.risk === 'danger';
             const confirmed = state.confirmTicked[key] === true;
             const inputs = step.requiresInputs || [];
-            // Inputs are optional by default. Only rename-device requires its single value.
-            const requiredFieldsFilled = inputs.every(inp => {
-                if (step.id === 'rename-device' && inp.name === 'value') {
-                    const v = state.inputValues[key + '.' + inp.name] || '';
-                    return v.trim().length > 0;
-                }
-                return true;
-            });
-            const runDisabled = isRunning || (isDanger && !confirmed) || !requiredFieldsFilled;
+            // Every remaining input is optional (active-hours defaults to 3).
+            const runDisabled = isRunning || (isDanger && !confirmed);
 
             const linksHtml = step.links ? `
               <ul class="links-list">
@@ -1136,7 +1106,7 @@ function attachMigrateHandlers() {
         render();
     });
 
-    // Inputs (verify-autologon, rename-device) - same handler as module view.
+    // Step inputs - same handler as module view.
     document.querySelectorAll('[data-step-input]').forEach(el => {
         el.addEventListener('input', (e) => {
             state.inputValues[el.dataset.stepInput] = e.target.value;

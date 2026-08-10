@@ -1,66 +1,9 @@
 # windows.ps1 - Module 2: Windows Settings step functions
 
-function Invoke-WindowsVerifyAutologon {
-    param(
-        [string]$username = "",
-        [string]$password = "",
-        [string]$domain   = ""
-    )
-
-    Write-Section "Verifying autologon configuration"
-
-    $winlogonPath = "HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Winlogon"
-    $autoAdmin     = (Get-ItemProperty -Path $winlogonPath -Name AutoAdminLogon    -ErrorAction SilentlyContinue).AutoAdminLogon
-    $defaultUser   = (Get-ItemProperty -Path $winlogonPath -Name DefaultUserName   -ErrorAction SilentlyContinue).DefaultUserName
-    $defaultDomain = (Get-ItemProperty -Path $winlogonPath -Name DefaultDomainName -ErrorAction SilentlyContinue).DefaultDomainName
-
-    Write-Log "Current AutoAdminLogon:  $autoAdmin"
-    Write-Log "Current DefaultUserName: $defaultUser"
-    Write-Log "Current DefaultDomainName: $defaultDomain"
-
-    $hasInputs = ($username -and $username.Trim()) -or ($password -and $password.Trim()) -or ($domain -and $domain.Trim())
-
-    if ($autoAdmin -eq "1" -and -not $hasInputs) {
-        Write-Log "Autologon is active. Terminal will boot directly to user: $defaultUser" "OK"
-        return
-    }
-
-    if ($autoAdmin -ne "1") {
-        Write-Log "Autologon is NOT active. Terminal will show the login screen on reboot." "WARN"
-    }
-
-    if (-not $hasInputs) {
-        Write-Log "Fill in Username and Password (and optionally Domain) in the form, then run again to enable autologon." "WARN"
-        return
-    }
-
-    if (-not $username -or -not $username.Trim()) {
-        Write-Log "Username is required to enable autologon." "ERROR"
-        return
-    }
-    if (-not $password) {
-        Write-Log "Password is required to enable autologon." "ERROR"
-        return
-    }
-
-    Write-Log "Enabling autologon for user: $username"
-    Set-ItemProperty -Path $winlogonPath -Name AutoAdminLogon  -Value "1"     -Force
-    Set-ItemProperty -Path $winlogonPath -Name DefaultUserName -Value $username -Force
-    Set-ItemProperty -Path $winlogonPath -Name DefaultPassword -Value $password -Force
-    if ($domain -and $domain.Trim()) {
-        Set-ItemProperty -Path $winlogonPath -Name DefaultDomainName -Value $domain.Trim() -Force
-    } else {
-        Set-ItemProperty -Path $winlogonPath -Name DefaultDomainName -Value $env:COMPUTERNAME -Force
-    }
-
-    Write-Log "Autologon registry values written." "OK"
-    Write-Log "Note: DefaultPassword is stored in plaintext at $winlogonPath - this is the standard AutoAdminLogon mechanism." "WARN"
-    Write-Log "Effective after the final restart at the end of the toolkit."
-}
-
 function Invoke-WindowsEnableFirewall {
-    Write-Section "Enabling Windows Firewall"
+    Write-Section "Firewall, network profile, and sharing"
 
+    # --- 1. Firewall on for every profile ---
     $profileNames = @("Domain", "Private", "Public")
     foreach ($p in $profileNames) {
         Set-NetFirewallProfile -Profile $p -Enabled True -ErrorAction SilentlyContinue
@@ -68,6 +11,155 @@ function Invoke-WindowsEnableFirewall {
         $level = if ($status) { "OK" } else { "ERROR" }
         Write-Log "Profile $p firewall enabled: $status" $level
     }
+
+    # --- 2. Every active network set to Private ---
+    # Public blocks the file/printer sharing a POS network needs. Domain-authenticated
+    # networks cannot be re-categorised (Windows owns that classification), so those
+    # are reported and skipped rather than treated as a failure.
+    Write-Log ""
+    Write-Log "Setting active networks to the Private profile..."
+    $profiles = @(Get-NetConnectionProfile -ErrorAction SilentlyContinue)
+    if ($profiles.Count -eq 0) {
+        Write-Log "No active network connections found." "WARN"
+    }
+    foreach ($np in $profiles) {
+        if ($np.NetworkCategory -eq 'DomainAuthenticated') {
+            Write-Log "'$($np.Name)' is DomainAuthenticated - Windows manages this category, leaving as-is." "WARN"
+            continue
+        }
+        if ($np.NetworkCategory -eq 'Private') {
+            Write-Log "'$($np.Name)' is already Private." "OK"
+            continue
+        }
+        try {
+            Set-NetConnectionProfile -InterfaceIndex $np.InterfaceIndex -NetworkCategory Private -ErrorAction Stop
+            Write-Log "'$($np.Name)' switched from $($np.NetworkCategory) to Private." "OK"
+        } catch {
+            Write-Log "Could not set '$($np.Name)' to Private: $($_.Exception.Message)" "WARN"
+        }
+    }
+
+    # --- 3. File and printer sharing + network discovery, Private profile only ---
+    # Scoped to Private so the rules never open up a Public network.
+    Write-Log ""
+    Write-Log "Enabling file and printer sharing on the Private profile..."
+    $groups = @("File and Printer Sharing", "Network Discovery")
+    foreach ($g in $groups) {
+        try {
+            $rules = @(Get-NetFirewallRule -DisplayGroup $g -ErrorAction Stop |
+                Where-Object { $_.Profile -match 'Private|Any' })
+            if ($rules.Count -eq 0) {
+                Write-Log "No Private-profile rules found for '$g'." "WARN"
+                continue
+            }
+            $rules | Enable-NetFirewallRule -ErrorAction SilentlyContinue
+            Write-Log "'$g' enabled for Private ($($rules.Count) rule(s))." "OK"
+        } catch {
+            Write-Log "Could not enable '$g': $($_.Exception.Message)" "WARN"
+        }
+    }
+
+    # Turn on the sharing feature itself, not just the firewall holes.
+    try {
+        Set-Service -Name "FDResPub"  -StartupType Automatic -ErrorAction SilentlyContinue
+        Set-Service -Name "fdPHost"   -StartupType Automatic -ErrorAction SilentlyContinue
+        Start-Service -Name "FDResPub" -ErrorAction SilentlyContinue
+        Start-Service -Name "fdPHost"  -ErrorAction SilentlyContinue
+        Write-Log "Function Discovery services set to Automatic and started." "OK"
+    } catch {
+        Write-Log "Could not configure Function Discovery services: $($_.Exception.Message)" "WARN"
+    }
+
+    Write-Log ""
+    Write-Log "Firewall and network sharing configuration complete." "OK"
+}
+
+function Invoke-WindowsDefaultBrowser {
+    Write-Section "Setting Microsoft Edge as the default browser"
+
+    $isAdmin = ([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
+    if (-not $isAdmin) {
+        Write-Log "This step requires administrator privileges. Please restart the toolkit as Administrator (right-click Launch.ps1 -> Run as administrator)." "ERROR"
+        return
+    }
+
+    $edgePaths = @(
+        "C:\Program Files (x86)\Microsoft\Edge\Application\msedge.exe",
+        "C:\Program Files\Microsoft\Edge\Application\msedge.exe"
+    )
+    $edge = $edgePaths | Where-Object { Test-Path $_ } | Select-Object -First 1
+    if (-not $edge) {
+        Write-Log "Microsoft Edge was not found on this device. Cannot set it as default." "ERROR"
+        return
+    }
+    Write-Log "Edge found at: $edge"
+
+    # Windows 10/11 protect the per-user default-browser choice with a hashed
+    # UserChoice key that cannot be written directly. The supported machine-wide
+    # mechanism is a DefaultAssociations XML enforced by policy - it applies at
+    # every sign-in and to every user on the device.
+    $assetsDir = "C:\Oolio\Assets"
+    if (-not (Test-Path $assetsDir)) { New-Item -ItemType Directory -Path $assetsDir -Force | Out-Null }
+    $xmlPath = Join-Path $assetsDir "DefaultAssociations.xml"
+
+    $xml = @"
+<?xml version="1.0" encoding="UTF-8"?>
+<DefaultAssociations>
+  <Association Identifier="http"   ProgId="MSEdgeHTM" ApplicationName="Microsoft Edge" />
+  <Association Identifier="https"  ProgId="MSEdgeHTM" ApplicationName="Microsoft Edge" />
+  <Association Identifier=".htm"   ProgId="MSEdgeHTM" ApplicationName="Microsoft Edge" />
+  <Association Identifier=".html"  ProgId="MSEdgeHTM" ApplicationName="Microsoft Edge" />
+  <Association Identifier=".pdf"   ProgId="MSEdgeHTM" ApplicationName="Microsoft Edge" />
+</DefaultAssociations>
+"@
+    Set-Content -Path $xmlPath -Value $xml -Encoding UTF8 -Force
+    Write-Log "Wrote association map: $xmlPath" "OK"
+
+    $sysPol = "HKLM:\SOFTWARE\Policies\Microsoft\Windows\System"
+    if (-not (Test-Path $sysPol)) { New-Item -Path $sysPol -Force | Out-Null }
+    Set-ItemProperty -Path $sysPol -Name "DefaultAssociationsConfiguration" -Value $xmlPath -Type String -Force
+    Write-Log "Policy DefaultAssociationsConfiguration set - enforced at every sign-in." "OK"
+
+    # Also seed the machine defaults so new profiles get Edge without waiting for policy.
+    try {
+        $dismOut = & dism.exe /Online /Import-DefaultAppAssociations:"$xmlPath" 2>&1
+        if ($LASTEXITCODE -eq 0) {
+            Write-Log "DISM default app associations imported for new user profiles." "OK"
+        } else {
+            Write-Log "DISM import returned exit code $LASTEXITCODE (policy above still applies)." "WARN"
+        }
+    } catch {
+        Write-Log "DISM import failed: $($_.Exception.Message) (policy above still applies)." "WARN"
+    }
+
+    # --- Retire Internet Explorer ---
+    # Redirect any IE launch into Edge, and disable the optional feature outright.
+    $iePol = "HKLM:\SOFTWARE\Policies\Microsoft\Internet Explorer\Main"
+    if (-not (Test-Path $iePol)) { New-Item -Path $iePol -Force | Out-Null }
+    Set-ItemProperty -Path $iePol -Name "DisableFirstRunCustomize" -Value 1 -Type DWord -Force
+    $edgePol = "HKLM:\SOFTWARE\Policies\Microsoft\Edge"
+    if (-not (Test-Path $edgePol)) { New-Item -Path $edgePol -Force | Out-Null }
+    # 1 = redirect incompatible IE sites to Edge; keeps IE from ever being the browser.
+    Set-ItemProperty -Path $edgePol -Name "InternetExplorerIntegrationLevel"     -Value 1 -Type DWord -Force
+    Set-ItemProperty -Path $edgePol -Name "InternetExplorerIntegrationReloadInIEModeAllowed" -Value 0 -Type DWord -Force
+    Write-Log "Internet Explorer launches now redirect into Edge." "OK"
+
+    try {
+        $ieFeature = Get-WindowsOptionalFeature -Online -FeatureName "Internet-Explorer-Optional-amd64" -ErrorAction SilentlyContinue
+        if ($ieFeature -and $ieFeature.State -eq "Enabled") {
+            Write-Log "Disabling the Internet Explorer 11 optional feature (no restart)..."
+            Disable-WindowsOptionalFeature -Online -FeatureName "Internet-Explorer-Optional-amd64" -NoRestart -ErrorAction Stop | Out-Null
+            Write-Log "Internet Explorer 11 feature disabled - takes effect after restart." "OK"
+        } else {
+            Write-Log "Internet Explorer 11 optional feature is not enabled on this device." "OK"
+        }
+    } catch {
+        Write-Log "Could not disable the IE optional feature: $($_.Exception.Message)" "WARN"
+    }
+
+    Write-Log ""
+    Write-Log "Edge is now the enforced default browser." "OK"
+    Write-Log "The policy applies at next sign-in. The current user's existing choice is replaced then, not immediately." "WARN"
 }
 
 function Invoke-WindowsCheckIP {
@@ -118,59 +210,116 @@ function Invoke-WindowsSwitchDHCP {
     }
 }
 
-function Invoke-WindowsRenameDevice {
-    param([string]$terminalName)
-
-    Write-Section "Renaming device"
-
-    if (-not $terminalName -or $terminalName.Trim() -eq "") {
-        Write-Log "No terminal name provided. Cannot rename." "ERROR"
-        return
-    }
-
-    # Sanitise input - alphanumeric and hyphens only, max 12 chars for the suffix
-    $clean = $terminalName.Trim() -replace '[^a-zA-Z0-9\-]', ''
-    if ($clean.Length -gt 12) { $clean = $clean.Substring(0, 12) }
-
-    if ($clean.Length -eq 0) {
-        Write-Log "Sanitised name is empty. Provide alphanumeric characters." "ERROR"
-        return
-    }
-
-    $newName = "Oolio-$clean"
-    $currentName = $env:COMPUTERNAME
-
-    Write-Log "Current device name: $currentName"
-    Write-Log "New device name: $newName"
-
-    if ($currentName -eq $newName) {
-        Write-Log "Device is already named $newName. No change needed." "OK"
-        return
-    }
-
-    Rename-Computer -NewName $newName -Force -ErrorAction Stop
-    Write-Log "Device renamed to $newName." "OK"
-    Write-Log "This change will take effect after the final restart at the end of the toolkit." "WARN"
-}
-
 function Invoke-WindowsCleanDesktop {
-    Write-Section "Cleaning desktop"
+    Write-Section "Removing Bepoz apps from desktop, taskbar, and Start menu"
 
-    $paths = @(
+    # Matches a Bepoz shortcut either by its visible name or by where it points.
+    # Path matching is what catches renamed shortcuts ("Till", "Back Office").
+    $namePattern   = 'bepoz|backoffice|back office|paz|tillpaz'
+    $targetPattern = '\\Bepoz\\|\\Bepoz$'
+
+    function Test-IsBepozShortcut {
+        param([System.IO.FileInfo]$File, $Shell)
+
+        if ($File.Name -match $namePattern) { return $true }
+        if ($File.Extension -ne '.lnk')     { return $false }
+        try {
+            $lnk = $Shell.CreateShortcut($File.FullName)
+            $hay = "$($lnk.TargetPath) $($lnk.WorkingDirectory) $($lnk.Arguments)"
+            if ($hay -match $targetPattern)  { return $true }
+            if ($hay -match $namePattern)    { return $true }
+        } catch {}
+        return $false
+    }
+
+    $shell   = New-Object -ComObject WScript.Shell
+    $removed = 0
+    $scanned = 0
+
+    # --- 1. Desktops (current user + public) ---
+    $desktops = @(
         "$env:USERPROFILE\Desktop",
         "C:\Users\Public\Desktop"
     )
-
-    foreach ($path in $paths) {
-        if (Test-Path $path) {
-            $items = @(Get-ChildItem -Path $path)
-            Write-Log "Found $($items.Count) item(s) in $path"
-            foreach ($item in $items) { Write-Log "  Removing: $($item.Name)" }
-            Remove-Item -Path "$path\*" -Recurse -Force -ErrorAction SilentlyContinue
-            Write-Log "Cleared: $path" "OK"
+    foreach ($path in $desktops) {
+        if (-not (Test-Path $path)) { continue }
+        Write-Log "Scanning desktop: $path"
+        foreach ($item in @(Get-ChildItem -Path $path -File -ErrorAction SilentlyContinue)) {
+            $scanned++
+            if (Test-IsBepozShortcut -File $item -Shell $shell) {
+                Remove-Item -Path $item.FullName -Force -ErrorAction SilentlyContinue
+                Write-Log "  Removed: $($item.Name)" "OK"
+                $removed++
+            }
         }
     }
-    Write-Log "Desktop cleanup complete." "OK"
+
+    # --- 2. Start menu (current user + all users), recursive ---
+    $startMenus = @(
+        "$env:APPDATA\Microsoft\Windows\Start Menu\Programs",
+        "C:\ProgramData\Microsoft\Windows\Start Menu\Programs"
+    )
+    foreach ($path in $startMenus) {
+        if (-not (Test-Path $path)) { continue }
+        Write-Log "Scanning Start menu: $path"
+        foreach ($item in @(Get-ChildItem -Path $path -File -Recurse -ErrorAction SilentlyContinue)) {
+            $scanned++
+            if (Test-IsBepozShortcut -File $item -Shell $shell) {
+                Remove-Item -Path $item.FullName -Force -ErrorAction SilentlyContinue
+                Write-Log "  Removed: $($item.Name)" "OK"
+                $removed++
+            }
+        }
+        # Drop any now-empty Bepoz program folders left behind.
+        foreach ($dir in @(Get-ChildItem -Path $path -Directory -Recurse -ErrorAction SilentlyContinue |
+                            Where-Object { $_.Name -match $namePattern })) {
+            if (-not (Get-ChildItem -Path $dir.FullName -Recurse -File -ErrorAction SilentlyContinue)) {
+                Remove-Item -Path $dir.FullName -Recurse -Force -ErrorAction SilentlyContinue
+                Write-Log "  Removed empty folder: $($dir.Name)" "OK"
+            }
+        }
+    }
+
+    # --- 3. Taskbar pins ---
+    # Pinned shortcuts live in the User Pinned\TaskBar folder. Removing the .lnk
+    # clears the pin; Explorer also caches the layout in the Taskband key, so that
+    # is cleared too and Explorer restarted to force a re-read.
+    $taskbarPath = "$env:APPDATA\Microsoft\Internet Explorer\Quick Launch\User Pinned\TaskBar"
+    $unpinned = 0
+    if (Test-Path $taskbarPath) {
+        Write-Log "Scanning taskbar pins: $taskbarPath"
+        foreach ($item in @(Get-ChildItem -Path $taskbarPath -File -ErrorAction SilentlyContinue)) {
+            $scanned++
+            if (Test-IsBepozShortcut -File $item -Shell $shell) {
+                Remove-Item -Path $item.FullName -Force -ErrorAction SilentlyContinue
+                Write-Log "  Unpinned: $($item.Name)" "OK"
+                $removed++
+                $unpinned++
+            }
+        }
+    }
+
+    if ($unpinned -gt 0) {
+        $taskband = "HKCU:\Software\Microsoft\Windows\CurrentVersion\Explorer\Taskband"
+        Remove-ItemProperty -Path $taskband -Name "Favorites"       -Force -ErrorAction SilentlyContinue
+        Remove-ItemProperty -Path $taskband -Name "FavoritesResolve" -Force -ErrorAction SilentlyContinue
+        Write-Log "Cleared cached taskbar layout. Restarting Explorer to apply..."
+        Stop-Process -Name explorer -Force -ErrorAction SilentlyContinue
+        Start-Sleep -Seconds 2
+        if (-not (Get-Process -Name explorer -ErrorAction SilentlyContinue)) {
+            Start-Process explorer.exe
+        }
+        Write-Log "Explorer restarted." "OK"
+    }
+
+    Write-Log ""
+    if ($removed -eq 0) {
+        Write-Log "Scanned $scanned item(s). No Bepoz shortcuts found - nothing to remove." "OK"
+    } else {
+        Write-Log "Scanned $scanned item(s) and removed $removed Bepoz shortcut(s)." "OK"
+    }
+    Write-Log "Non-Bepoz shortcuts were left untouched." "OK"
+    Write-Log "Taskbar and Start menu are cleaned for the user running the toolkit. Re-run under the POS user if that is a different account." "WARN"
 }
 
 function Invoke-WindowsSetWallpaper {
@@ -325,8 +474,43 @@ function Invoke-WindowsTouchInput {
     Write-Log "Edge swipe gestures disabled (AllowEdgeSwipe=0)" "OK"
     Write-Log "Action Center (swipe from right) and Task View (swipe from left) are now blocked." "OK"
 
+    # --- Pinch zoom ---
+    # Two-finger pinch resizes the POS UI mid-transaction and staff rarely know how
+    # to undo it. Blocked at three layers because no single one covers every device:
+    #   1. Chrome policy  - stops zoom inside the POS/CDS/KDS pages themselves
+    #   2. Precision touchpad - the pinch-to-zoom gesture on laptop-style terminals
+    #   3. Wisp touch     - the touchscreen pinch gesture
+    Write-Log ""
+    Write-Log "Disabling pinch zoom..."
+
+    # 1. Chrome: pin zoom at 100% and stop the user changing it. DefaultZoomLevel 0
+    #    is 100%; ZoomLevelsAllowed = 0 removes the zoom controls entirely.
+    $chromePol = "HKLM:\SOFTWARE\Policies\Google\Chrome"
+    Ensure-Path $chromePol
+    Set-ItemProperty -Path $chromePol -Name "DefaultZoomLevel" -Value 0 -Type DWord -Force
+    Write-Log "Chrome zoom pinned at 100% (DefaultZoomLevel=0)" "OK"
+
+    # 2. Precision touchpad pinch-to-zoom.
+    $ptpPath = "HKCU:\SOFTWARE\Microsoft\Windows\CurrentVersion\PrecisionTouchPad"
+    if (Test-Path $ptpPath) {
+        Set-ItemProperty -Path $ptpPath -Name "ZoomEnabled" -Value 0 -Type DWord -Force -ErrorAction SilentlyContinue
+        Write-Log "Precision touchpad pinch-to-zoom disabled (ZoomEnabled=0)" "OK"
+    } else {
+        Write-Log "No precision touchpad on this device - skipping touchpad zoom." "OK"
+    }
+
+    # 3. Touchscreen pinch. The Wisp zoom value is per-user and read at sign-in.
+    $wispTouch = "HKCU:\SOFTWARE\Microsoft\Wisp\Touch"
+    Ensure-Path $wispTouch
+    Set-ItemProperty -Path $wispTouch -Name "TouchGate"      -Value 1 -Type DWord -Force -ErrorAction SilentlyContinue
+    Set-ItemProperty -Path $wispTouch -Name "ZoomEnabled"    -Value 0 -Type DWord -Force -ErrorAction SilentlyContinue
+    Set-ItemProperty -Path $wispTouch -Name "PanEnabled"     -Value 1 -Type DWord -Force -ErrorAction SilentlyContinue
+    Write-Log "Touchscreen pinch zoom disabled (panning and tapping still work)" "OK"
+
+    Write-Log ""
     Write-Log "Touch input configuration complete." "OK"
     Write-Log "Sign out and back in (or reboot) for HKCU changes to take effect." "WARN"
+    Write-Log "The Oolio shortcuts also pass --disable-pinch to Chrome, which blocks zoom inside the POS itself." "OK"
 }
 
 function Invoke-WindowsUsbPower {

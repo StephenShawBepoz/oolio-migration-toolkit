@@ -33,14 +33,13 @@ function Get-DefaultProgress {
             "consolidate-backups"  = "pending"
         }
         windows = @{
-            "verify-autologon" = "pending"
             "enable-firewall"  = "pending"
+            "default-browser"  = "pending"
             "active-hours"     = "pending"
             "harden-pos"       = "pending"
             "touch-input"      = "pending"
             "usb-power"        = "pending"
             "check-ip"         = "pending"
-            "rename-device"    = "pending"
             "clean-desktop"    = "pending"
             "set-wallpaper"    = "pending"
         }
@@ -59,7 +58,6 @@ function Get-DefaultProgress {
             "final-restart"      = "pending"
         }
         meta = @{
-            terminalName    = ""
             terminalType    = ""
             hasCDS          = $false
             deploymentMode  = ""
@@ -241,13 +239,8 @@ function Invoke-StepStreaming {
         # Build a child-PowerShell command that dot-sources shared + module, then calls the function.
         # Output is line-buffered to stdout so we can stream it back as SSE.
         $argSegment = ""
-        if ($StepId -eq "rename-device") {
-            $argSegment = " -terminalName " + (Quote-PSLiteral $value)
-        } elseif ($StepId -eq "set-wallpaper") {
+        if ($StepId -eq "set-wallpaper") {
             $argSegment = " -toolkitRoot " + (Quote-PSLiteral $ToolkitRoot)
-        } elseif ($StepId -eq "verify-autologon") {
-            $u = $Params["username"]; $p = $Params["password"]; $d = $Params["domain"]
-            $argSegment = " -username " + (Quote-PSLiteral $u) + " -password " + (Quote-PSLiteral $p) + " -domain " + (Quote-PSLiteral $d)
         } elseif ($StepId -eq "active-hours") {
             $argSegment = " -updateHour " + (Quote-PSLiteral $value)
         }
@@ -370,10 +363,7 @@ try {
                         Write-TextResponse -Response $response -Body "Missing module or step parameter" -Status 400
                     } else {
                         $params = @{
-                            value    = Get-QueryValue -Query $request.Url.Query -Key "value"
-                            username = Get-QueryValue -Query $request.Url.Query -Key "username"
-                            password = Get-QueryValue -Query $request.Url.Query -Key "password"
-                            domain   = Get-QueryValue -Query $request.Url.Query -Key "domain"
+                            value = Get-QueryValue -Query $request.Url.Query -Key "value"
                         }
                         Invoke-StepStreaming -Response $response -ModuleId $moduleId -StepId $stepId -Params $params
                     }

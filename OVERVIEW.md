@@ -15,10 +15,10 @@ Migrating a Bepoz terminal to Oolio is a multi-step process that mixes:
 - Backing up the Bepoz `Data` folder
 - Killing residual Bepoz processes
 - Cleaning out Windows shell:startup, run-keys, and the Bepoz install folder
-- Verifying / enabling Windows autologon, firewall, network configuration
-- Installing Oolio dependencies (Chrome, WebView2, printer utilities)
-- Building the Oolio kiosk shortcut and wiring it into shell:startup
-- Renaming the device and applying the Oolio wallpaper
+- Configuring the firewall, network profile, default browser, touch input, and port power settings
+- Installing Oolio dependencies (WebView2, TeamViewer, EpsonNet Config)
+- Building the Oolio fullscreen shortcut and wiring it into shell:startup
+- Clearing Bepoz apps off the desktop, taskbar, and Start menu, then applying the Oolio wallpaper
 - Scheduling the final restart
 
 Done by hand, that's a 30-step checklist with site-specific decisions, easy-to-miss safety guards, and several genuinely destructive actions (registry deletes, folder removals, restart-on-timer). Different terminal types (server vs server-till vs till) need different subsets of steps, which makes the checklist even harder to follow. Errors in the wrong order can break a venue.
@@ -43,9 +43,10 @@ The toolkit asks one question at the start — **what kind of terminal is this?*
 | **S** | Server | On-premises venue server. Runs SQL Server and holds Bepoz data. No POS interface. |
 | **ST** | Server Till | Acts as both venue server and POS terminal. Runs SQL, holds data, and runs the till. |
 | **T** | Till | POS terminal only. No SQL Server. No Bepoz data stored locally. |
+| **KDS** | Kitchen Display | Dedicated kitchen display terminal. Runs the Oolio KDS fullscreen. No SQL Server, no Bepoz data. |
 | **ALL** | All modules (manual) | Skip the type filter. Show every step in the original 1 / 2 / 3 / 4 order for cherry-picking. |
 
-The migration is organised into four modules. Modules 3 and 4 only apply to Server-Till machines, so a pure Server or pure Till tech sees a shorter flow.
+The migration is organised into four modules. Modules 3 and 4 apply to Server-Till and KDS machines, so a pure Server or pure Till tech sees a shorter flow.
 
 ### Module 1 — Bepoz Software
 
@@ -66,27 +67,37 @@ End state: no `C:\Bepoz\` folder. All backup artefacts (data zip + run-key `.reg
 
 Brings Windows itself in line with Oolio's POS conventions.
 
-1. **Verify & enable autologon** — Reads the Winlogon registry. If autologon is off and the technician fills the username / password / (optional) domain form, writes the autologon registry values. Logs that `DefaultPassword` is plaintext (standard Windows AutoAdminLogon mechanism).
-2. **Enable Windows Firewall** — All three profiles (Domain, Private, Public).
-3. **Check IP configuration** — Reports current IP and DHCP status. If a static IP is detected, the migrate flow surfaces an inline "Switch to DHCP / Skip" pause card.
-4. **Rename device** — Optional. Renames to `Oolio-<suffix>`; technician supplies the suffix. Effective after the final restart.
-5. **Clean desktop** — Wipes user and public desktop. _ST only._
-6. **Apply Oolio wallpaper** — Copies `assets/wallpaper.jpg` to `C:\Oolio\Assets\` and applies it via `SystemParametersInfo`. _ST only._
+1. **Firewall, Private network & sharing** — Firewall on for all three profiles (Domain, Private, Public). Every active network set to the Private profile — domain-authenticated networks are left alone, since Windows owns that classification. File and Printer Sharing plus Network Discovery enabled on the Private profile only, and the Function Discovery services started so shared printers are reachable.
+2. **Set Microsoft Edge as default browser** — Enforces Edge for `http`, `https`, `.htm`, `.html`, `.pdf` via the `DefaultAssociationsConfiguration` policy, which applies to every user at sign-in. Redirects any Internet Explorer launch into Edge and disables the IE11 optional feature.
+3. **Configure Windows Update active hours** — Locks a 6-hour update window (default 3am) via Group Policy and clears `NoAutoRebootWithLoggedOnUsers`.
+4. **Disable Windows nags** — OneDrive prompts, Spotlight, Cortana, news/widgets, Edge first-run, Microsoft Account nag. _ST, T, KDS._
+5. **Touch keyboard, pinch zoom & edge swipes** — Touch keyboard auto-invoke on; edge swipes and two-finger pinch zoom off (Chrome policy + precision touchpad + touchscreen). Panning and tapping still work. _ST, T, KDS._
+6. **Disable USB / serial port power saving** — Stops Windows powering down USB and COM devices, the usual cause of printers and cash drawers dropping off mid-shift. _ST, T, KDS._
+7. **Check IP configuration** — Reports current IP and DHCP status. If a static IP is detected, the migrate flow surfaces an inline "Switch to DHCP / Skip" pause card.
+8. **Remove Bepoz apps from desktop, taskbar & Start** — Targeted removal of Bepoz shortcuts across both desktops, the Start menu (recursive), and taskbar pins. Matches on shortcut name *and* on where the shortcut points, so renamed shortcuts are still caught. Non-Bepoz shortcuts are left untouched. _ST, T, KDS._
+9. **Apply Oolio wallpaper** — Copies `assets/wallpaper.jpg` to `C:\Oolio\Assets\` and applies it via `SystemParametersInfo`. _ST, KDS._
 
-### Module 3 — Oolio Dependencies _(ST only)_
+Autologon is **not** configured by the toolkit — it is expected to be set on the device image. The `set-startup` step in module 4 reports its state read-only so a terminal that would stop at the login screen is caught before go-live.
 
-1. **Check / install Google Chrome** — If Chrome isn't present, downloads the Google Enterprise MSI from `dl.google.com` and runs `msiexec /i /qn /norestart`. Internet required at this step only.
-2. **Check Edge WebView2** — Confirms presence; opens the Microsoft download page if missing.
-3. **Printer utilities** — A links-only step. Opens vendor download pages for Epson, Star, Bixolon, Element/Gravity printer utility tools. The technician handles installation manually and clicks "Mark done & continue".
+### Module 3 — Oolio Dependencies _(ST, KDS)_
 
-### Module 4 — Oolio POS Setup _(ST only)_
+Google Chrome is assumed to be present on the device image; the toolkit no longer installs it.
 
-1. **Deployment options** — Form: deployment mode (Chrome kiosk in v1) and whether a Customer Display (CDS) is present. Drives which subsequent steps appear.
+1. **Check / install Edge WebView2** — If missing, downloads the Microsoft Evergreen Bootstrapper and installs silently (`/silent /install`). Internet required.
+2. **Check / install TeamViewer** — If missing, downloads `TeamViewer_Setup_x64.exe` and installs with `/S`, then polls up to 3 minutes for the binary to appear (the installer hands off to a background service installer and exits early).
+3. **Check / install EpsonNet Config** — _ST only._ Downloads ENCU from `ftp.epson.com`, verifies the Epson signature, and launches the wizard for manual click-through while polling for completion.
+
+### Module 4 — Oolio Setup _(ST, KDS)_
+
+1. **Deployment options** — _ST only._ Form: deployment mode (Chrome fullscreen in v1) and whether a Customer Display (CDS) is present. Drives which subsequent steps appear.
 2. **Create Oolio folders** — `C:\Oolio\` plus `Assets`, `Certs`, `Logs` subfolders.
-3. **Create Oolio POS shortcut** — Public-desktop `.lnk` launching `pos.oolio.io` in fullscreen kiosk mode.
-4. **Create Oolio CDS shortcut** — _Only if CDS=Yes._ Public-desktop shortcut launching `cds.oolio.io` on the second display (`--window-position=1920,0`).
-5. **Configure startup** — Copies the desktop shortcut(s) into `shell:startup` so the kiosk launches when the autologon user signs in. Tidies up legacy HKCU `Run` entries from older toolkit builds.
-6. **Schedule final restart** — `shutdown /r /t 30`. **Danger** — confirmation tick required. Run `shutdown /a` to cancel after it has scheduled.
+3. **Create Oolio POS shortcut** — _ST only._ Public-desktop `.lnk` launching `pos.oolio.io` in Chrome app mode, fullscreen, with the site favicon as its icon.
+4. **Create Oolio CDS shortcut** — _ST, only if CDS=Yes._ Public-desktop shortcut launching `cds.oolio.io` on the second display (`--window-position=1920,0`).
+5. **Create Oolio KDS shortcut** — _KDS only._ Public-desktop shortcut launching `kds.oolio.io` fullscreen.
+6. **Configure startup** — Copies the desktop shortcut(s) into `shell:startup` so Oolio launches when the autologon user signs in. Reports whether autologon is actually enabled. Tidies up legacy HKCU `Run` entries.
+7. **Schedule final restart** — `shutdown /r /t 30`. **Danger** — confirmation tick required. Run `shutdown /a` to cancel after it has scheduled.
+
+Shortcuts use Chrome **app mode** (`--app=<url> --start-fullscreen --disable-pinch`) rather than `--kiosk`. App mode is equally chrome-free but can still be exited with the Windows key or Alt+F4 — which matters on a touchscreen terminal with no physical keyboard, where kiosk mode leaves no way out.
 
 ---
 
@@ -144,7 +155,7 @@ State persists in `progress.json` at the toolkit root. The UI POSTs the whole ob
 The migrate flow is a state machine that classifies each pending step into one of:
 
 - **auto-run** — safe / warn step with no inputs and no danger; runs unattended
-- **pause-form** — step with `requiresInputs` (verify-autologon, rename-device); shows fields, waits for technician to fill and click Run
+- **pause-form** — step with `requiresInputs` (active-hours); shows fields, waits for technician to fill and click Run
 - **pause-config** — the deployment-options form
 - **pause-manual** — links-only step (printer utilities); waits for "Mark done & continue"
 - **pause-confirm** — danger step; requires confirmation tick before Run is enabled
@@ -182,7 +193,7 @@ See `screenshots/` for the captured states:
 | `03-module-bepoz.png` | Bepoz module — all 8 steps with risk dots |
 | `04-danger-step-expanded.png` | Danger step expanded — confirmation tick gates Run |
 | `05-migrate-pause-danger.png` | Migrate flow paused at a danger step |
-| `06-migrate-pause-form.png` | Migrate flow paused at verify-autologon — multi-input form |
+| `06-migrate-pause-form.png` | Migrate flow paused at a step with an input form |
 | `07-migrate-pause-optional-dhcp.png` | Inline "Switch to DHCP" pause when static IP detected |
 | `08-migrate-pause-config.png` | Deployment-options form embedded in migrate flow |
 | `09-migrate-pause-manual.png` | Printer utilities pause — links + Mark done |
@@ -200,7 +211,7 @@ See `screenshots/` for the captured states:
 - **EventSource (SSE)** — one-way browser ← server streaming for live PowerShell output
 - **GitHub Releases** — versioned distribution; `bootstrap.ps1` pulls `OolioMigration.zip` from the latest release
 
-The whole thing is ~117 KB compressed. No internet required at runtime except for Chrome auto-install in Module 3.
+The whole thing is ~117 KB compressed. No internet required at runtime except for the dependency installs in Module 3.
 
 ---
 
@@ -216,6 +227,12 @@ iwr https://raw.githubusercontent.com/StephenShawBepoz/oolio-migration-toolkit/m
 
 The bootstrapper downloads `OolioMigration.zip` from the latest GitHub release, extracts to `C:\OolioMigration\`, and launches `Launch.ps1` elevated.
 
+### Building the release zip
+
+Run `.\build-release.ps1` from the repo root. It stages only the runtime files and writes `dist\OolioMigration.zip`; upload that as the release asset under that exact name.
+
+`bootstrap.ps1` is deliberately **not** packaged inside the zip. It is fetched raw from GitHub *before* the zip is ever downloaded, so a copy inside the archive is dead weight — and worse, it gives technicians a second, potentially stale bootstrapper sitting on the terminal that they might run instead of the current one. Documentation (`README.md`, `OVERVIEW.md`, `claude.md`, `screenshots/`) is excluded for the same reason: none of it is needed at run time.
+
 **Manual — USB stick:** Download the ZIP from the [Releases page](https://github.com/StephenShawBepoz/oolio-migration-toolkit/releases/latest), copy the `OolioMigration\` folder to the terminal, right-click `Launch.ps1` → Run as Administrator.
 
 ---
@@ -225,10 +242,11 @@ The bootstrapper downloads `OolioMigration.zip` from the latest GitHub release, 
 ```
 oolio-migration-toolkit/
   Launch.ps1                  Entry point. Elevates, starts server, opens browser.
-  bootstrap.ps1               Remote installer pulled by ScreenConnect one-liner.
+  bootstrap.ps1               Remote installer pulled by ScreenConnect one-liner. NOT shipped in the zip.
+  build-release.ps1           Packages dist\OolioMigration.zip (runtime files only).
   README.md                   Install / quickstart.
   OVERVIEW.md                 This file.
-  claude.md                   Original technical spec (frozen for traceability).
+  claude.md                   Original technical spec — has drifted; code is source of truth.
 
   server/
     server.ps1                HttpListener, SSE streaming, /progress GET+POST.
@@ -264,7 +282,7 @@ oolio-migration-toolkit/
 - Beta-testing on non-production terminals
 
 **Out of scope for v1, planned next:**
-- Windows-app mode for Oolio POS / CDS (currently Chrome kiosk only — installer hosting TBD)
+- Windows-app mode for Oolio POS / CDS (currently Chrome app mode only — installer hosting TBD)
 - Element / Gravity printer utility download links (pending Oolio confirmation)
 - Multi-terminal batch mode (one terminal at a time for v1)
 - Automatic printer IP detection (technician assigns IPs via printer utility manually for v1)
@@ -284,7 +302,7 @@ oolio-migration-toolkit/
 | HKCU / HKLM | Registry hives — Current User / Local Machine |
 | shell:startup | Per-user folder whose contents auto-launch at login |
 | Autologon | Windows feature that logs a specified user in automatically on boot |
-| Kiosk mode | Chrome flag (`--kiosk`) that runs a single URL fullscreen with no chrome |
+| App mode | Chrome flag (`--app=<url>`) that runs a single URL with no browser UI; paired with `--start-fullscreen` |
 | CDS | Customer Display — a second screen showing the order to the customer |
 | KDS | Kitchen Display System — a screen in the kitchen showing tickets |
 | SSE | Server-Sent Events — one-way HTTP streaming used for live output |
