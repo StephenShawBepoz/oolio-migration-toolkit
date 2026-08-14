@@ -15,21 +15,26 @@
 # The env var is used rather than a parameter because `| iex` cannot pass
 # arguments. -Source still works when the file is run directly.
 
-[CmdletBinding()]
-param(
-    [ValidateSet('release', 'main')]
-    [string]$Source
-)
+# NOTE: deliberately no param() block. This script is normally run by piping its
+# text into Invoke-Expression, and `| iex` evaluates a param() block in the
+# CALLER's scope as a variable declaration - so a [ValidateSet] attribute is
+# applied to an empty $Source and fails instantly with "The attribute cannot be
+# added because variable Source with value would no longer be valid." Reading the
+# environment variable, with a positional $args fallback for direct file
+# execution, works identically in both invocation styles.
 
 $ErrorActionPreference = 'Stop'
 
-# Parameter wins; then the env var (the only channel available under `| iex`);
-# then default to the published release.
-if (-not $Source) {
-    if ($env:OOLIO_SOURCE) { $Source = $env:OOLIO_SOURCE.Trim().ToLower() } else { $Source = 'release' }
-}
-if ($Source -notin @('release', 'main')) {
-    Write-Host "ERROR: OOLIO_SOURCE must be 'release' or 'main' (got '$Source')." -ForegroundColor Red
+# Env var first (the only channel available under `| iex`), then a positional
+# argument for `-File bootstrap.ps1 main`, then default to the published release.
+$oolioSource = $env:OOLIO_SOURCE
+if (-not $oolioSource -and $args.Count -ge 1) { $oolioSource = [string]$args[0] }
+if (-not $oolioSource) { $oolioSource = 'release' }
+$Source = $oolioSource.Trim().ToLower()
+
+if (@('release', 'main') -notcontains $Source) {
+    Write-Host "ERROR: source must be 'release' or 'main' (got '$Source')." -ForegroundColor Red
+    Write-Host "       Set it with:  `$env:OOLIO_SOURCE='main'" -ForegroundColor Yellow
     exit 1
 }
 
