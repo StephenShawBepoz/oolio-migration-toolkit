@@ -100,8 +100,13 @@ $script:ActiveSteps = @{}
 # ----- Pending secret inputs -----
 # Credentials stashed by POST /input just before a /run. EventSource is GET-only
 # and URLs persist in browser history on the terminal, so secrets must never
-# ride in the /run query string. Keyed by "moduleId/stepId"; single-use - the
-# streaming function consumes and removes the entry.
+# ride in the /run query string. Keyed by "moduleId/stepId".
+#
+# NOTE: no current step takes secrets (the autologon step was removed). The
+# stash and its single-use consumption in Invoke-StepStreaming are kept alive
+# so a future secret-bearing step gets the safe path for free: POST the fields
+# to /input, and they arrive in the child process as OOLIO_<FIELD> environment
+# variables - never on a command line, never in a URL.
 $script:PendingSecrets = @{}
 
 # ----- Manifest validator -----
@@ -404,6 +409,20 @@ function Invoke-StepStreaming {
 
         $argSegment = ""
         $childEnv = @{}
+
+        # Single-use consumption of any stashed secret fields for this step:
+        # each field becomes an OOLIO_<FIELD> environment variable in the child,
+        # and the stash entry is removed so it cannot leak into a later run.
+        $secretKey = "$ModuleId/$StepId"
+        if ($script:PendingSecrets.ContainsKey($secretKey)) {
+            $stash = $script:PendingSecrets[$secretKey]
+            foreach ($fieldProp in $stash.PSObject.Properties) {
+                $envName = "OOLIO_" + ($fieldProp.Name -replace '[^A-Za-z0-9]', '_').ToUpper()
+                $childEnv[$envName] = [string]$fieldProp.Value
+            }
+            $script:PendingSecrets.Remove($secretKey)
+        }
+
         if ($StepId -eq "set-wallpaper") {
             $argSegment = " -toolkitRoot " + (Quote-PSLiteral $ToolkitRoot)
         } elseif ($StepId -eq "install-pos-app") {
@@ -428,6 +447,12 @@ function Invoke-StepStreaming {
         $proc = New-Object System.Diagnostics.Process
         $proc.StartInfo = $psi
         $null = $proc.Start()
+
+        # Start draining stderr BEFORE the stdout loop. Reading stdout to EOF
+        # first is the classic Process pipe deadlock: a child that writes more
+        # than the ~4KB stderr pipe buffer blocks on its stderr write while we
+        # block waiting for more stdout, and the step hangs forever.
+        $errTask = $proc.StandardError.ReadToEndAsync()
 
         Write-SessionLog ""
         Write-SessionLog ("--- {0} :: {1}/{2} ---" -f (Get-Date -Format 'HH:mm:ss'), $ModuleId, $StepId)
@@ -456,9 +481,10 @@ function Invoke-StepStreaming {
             }
         }
 
-        # Drain stderr
-        $errOutput = $proc.StandardError.ReadToEnd()
+        # Collect the stderr that has been draining concurrently since Start().
         $proc.WaitForExit()
+        $errOutput = ""
+        try { $errOutput = $errTask.GetAwaiter().GetResult() } catch {}
 
         if ($errOutput -and $errOutput.Trim().Length -gt 0) {
             foreach ($eline in ($errOutput -split "`r?`n")) {
@@ -592,11 +618,35 @@ try {
                         Write-TextResponse -Response $response -Body '{"status":"error","message":"csrf"}' -ContentType "application/json" -Status 403
                         break
                     }
+                    # A real progress.json is a few KB; anything large is not the UI.
+                    if ($request.ContentLength64 -gt 262144) {
+                        Write-TextResponse -Response $response -Body '{"status":"error","message":"too large"}' -ContentType "application/json" -Status 413
+                        break
+                    }
                     $reader = New-Object System.IO.StreamReader($request.InputStream, $request.ContentEncoding)
                     $body = $reader.ReadToEnd()
                     $reader.Close()
                     try {
-                        $null = $body | ConvertFrom-Json
+                        $obj = $body | ConvertFrom-Json
+                        # Shape check: only known top-level keys, and step values
+                        # from the status enum. Junk written here would poison
+                        # every later session, so reject rather than store.
+                        $allowedTop = @('bepoz','windows','dependencies','oolio','meta')
+                        $allowedStatus = @('pending','running','complete','skipped','error')
+                        $shapeOk = $true
+                        foreach ($prop in $obj.PSObject.Properties) {
+                            if ($allowedTop -notcontains $prop.Name) { $shapeOk = $false; break }
+                            if ($prop.Name -eq 'meta') { continue }
+                            if ($null -eq $prop.Value) { continue }
+                            foreach ($step in $prop.Value.PSObject.Properties) {
+                                if ($allowedStatus -notcontains [string]$step.Value) { $shapeOk = $false; break }
+                            }
+                            if (-not $shapeOk) { break }
+                        }
+                        if (-not $shapeOk) {
+                            Write-TextResponse -Response $response -Body '{"status":"error","message":"unexpected shape"}' -ContentType "application/json" -Status 400
+                            break
+                        }
                         Save-AtomicJson -Path $progressPath -Json $body
                         Write-TextResponse -Response $response -Body '{"status":"ok"}' -ContentType "application/json"
                     } catch {

@@ -5,6 +5,23 @@ All notable changes to the Oolio Migration Toolkit. Newest first.
 ## Unreleased
 
 ### Fixed
+- **`consolidate-backups` no longer trusts a stale backup.** The deletion guard only checked that *some* `Bepoz_Data_*.zip` existed — a weeks-old zip from a previously aborted migration authorised recursive deletion of `C:\Bepoz` containing every trade since. The guard is now freshness-based: if the terminal holds data files, the newest backup zip must be **newer than the newest data file**, or the step aborts and tells the technician to re-run `zip-data`. Terminals with no local data (plain Till / KDS, which never run `zip-data`) no longer require a zip at all — previously the step could never succeed on those types.
+- **`zip-data` no longer reports silent success with unprotected data on disk.** If `DataPath` is missing from the registry (e.g. `delete-registry` already ran on a previous attempt) but `C:\Bepoz\Data` still holds files, the step now errors instead of skipping.
+- **`clean-desktop` only ever deletes shortcuts.** The name match ran before the extension check, so venue documents like "Bepoz EOD Procedures.pdf" or "Back Office Roster.xlsx" were deleted (no recycle bin). Only `.lnk`/`.url` files are candidates now, and generic names ("Back Office") no longer delete by name alone — Bepoz's own renamed shortcuts are caught by their `C:\Bepoz\` target instead, so "MYOB Back Office.lnk" survives. The test contract in `tests/patterns.tests.ps1` covers all of these cases.
+- **Removing a Bepoz taskbar pin no longer resets every other pin.** The step deleted Explorer's whole Taskband layout cache; now only the Bepoz `.lnk` is removed and Explorer re-reads the pin folder on restart.
+- **`clear-startup` moves items to `C:\OolioBackup\Startup_<timestamp>\` instead of deleting them**, and skips `Oolio*` entries so a re-run after `set-startup` cannot undo the Oolio autostart.
+- **`stop-sql` now handles a default SQL instance.** A `SQL_Server` registry value without `HOST\INSTANCE` format (e.g. `localhost`, `.`, the machine name) previously skipped; it now maps to the `MSSQLSERVER` service when the host is local, and still skips genuinely remote hosts.
+- **`switch-dhcp` clears the stale static default route** (which otherwise survives the flip and the reboot), renews the lease so the printed configuration shows the DHCP address, and isolates per-adapter failures so one bad NIC doesn't abort the rest.
+- **`Set-RegistryForAllUsers` actually covers new profiles now.** It wrote to `HKLM\.DEFAULT` — a key that does not exist — while logging OK; the real template is `C:\Users\Default\NTUSER.DAT`, which is now loaded like any other offline profile hive. Hive unload also gained a retry loop with GC pressure and loud failure reporting: a silently failed unload leaves the user's NTUSER.DAT locked so they cannot sign in.
+- **Step streaming can no longer deadlock on stderr.** Stdout was drained to EOF before stderr was read — the classic .NET pipe deadlock once a child writes more than the pipe buffer to stderr. Stderr now drains concurrently from process start.
+- `usb-power` reports "N updates FAILED" as an error instead of claiming everything was already disabled when its per-device writes throw.
+- `build-release.ps1`'s git context probes no longer abort under `$ErrorActionPreference='Stop'` on Windows PowerShell 5.1 (redirected native stderr becomes throwing ErrorRecords there).
+
+### Security
+- `POST /progress` enforces a 256 KB size cap and validates shape (known top-level keys, status values from the enum) before persisting - junk written there previously poisoned every later session.
+- The `PendingSecrets` stash's single-use contract is implemented again (consume + remove into child env vars, generically for any step), instead of existing only in a stale comment.
+
+### Fixed (earlier in this release)
 - **`clean-desktop` could delete non-Bepoz shortcuts.** The name pattern matched `paz` as an unanchored substring, which also matched "Topaz Signature Pad", "Pazzo Pizza", "La Paz" — real venue shortcuts. All alternatives are now word-bounded and `paz` is anchored to the start of the name; the target pattern no longer matches paths like `C:\BepozArchive\`. `tests/patterns.tests.ps1` extracts the live patterns from `windows.ps1` and asserts an explicit must-delete / must-keep contract, and runs in CI before every release.
 
 ### Security

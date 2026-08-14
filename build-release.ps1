@@ -87,9 +87,16 @@ Write-Host ''
 
 # --- Context: which commit is this build from? Informational only. ---
 try {
+    # Relax the error preference locally: under 'Stop' on Windows PowerShell
+    # 5.1, redirecting a native command's stderr turns each stderr line into a
+    # throwing ErrorRecord - so an innocuous git warning (e.g. CRLF notice from
+    # git status) would abort this whole context block.
+    $prevEap = $ErrorActionPreference
+    $ErrorActionPreference = 'Continue'
     $branch = (& git -C $repoRoot rev-parse --abbrev-ref HEAD 2>$null)
     $commit = (& git -C $repoRoot rev-parse --short HEAD 2>$null)
     $dirty  = (& git -C $repoRoot status --porcelain 2>$null)
+    $ErrorActionPreference = $prevEap
     if ($branch) {
         Write-Host ("Building from: {0} @ {1}" -f $branch, $commit)
         if ($branch -ne 'main') {
@@ -102,6 +109,7 @@ try {
     }
 } catch {
     # git not available - not fatal, this is just context
+    if ($prevEap) { $ErrorActionPreference = $prevEap }
 }
 
 # --- Validate before touching anything ---

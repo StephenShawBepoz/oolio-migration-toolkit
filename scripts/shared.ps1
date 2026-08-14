@@ -91,10 +91,16 @@ function Set-RegistryForAllUsers {
         [string]$Type = 'DWord'
     )
 
-    # Always start with the default user template - new profiles will inherit.
-    $targets = @(
-        @{ Hive = "HKLM\.DEFAULT"; LoadPath = $null; Label = ".DEFAULT" }
-    )
+    # New-profile coverage: HKU\.DEFAULT is the SYSTEM logon profile, and the
+    # actual template new users inherit from is C:\Users\Default\NTUSER.DAT -
+    # load that like any other offline profile hive. (The previous target here
+    # was HKLM\.DEFAULT, which does not exist: writes landed in a junk
+    # HKLM\.DEFAULT key tree while logging OK, and new profiles got nothing.)
+    $targets = @()
+    $defaultTemplate = Join-Path $env:SystemDrive "Users\Default\NTUSER.DAT"
+    if (Test-Path $defaultTemplate) {
+        $targets += @{ Hive = "HKU\Oolio_DefaultTemplate"; LoadPath = $defaultTemplate; Label = "Default user template" }
+    }
 
     # Loaded hives appear under HKEY_USERS\<SID>. Walk every profile in
     # ProfileList, skipping system accounts and already-loaded ones.
@@ -142,9 +148,21 @@ function Set-RegistryForAllUsers {
             Write-Log "  $($t.Label) :: failed - $($_.Exception.Message)" "WARN"
         } finally {
             if ($loaded) {
-                [gc]::Collect()
-                Start-Sleep -Milliseconds 200
-                $null = reg.exe unload $t.Hive 2>&1
+                # The registry provider (or AV / indexers) can hold a transient
+                # handle into the hive; a single blind unload can fail silently
+                # and leave NTUSER.DAT locked so the user cannot sign in. Retry
+                # with GC pressure between attempts and report a failure loudly.
+                $unloaded = $false
+                for ($attempt = 1; $attempt -le 4 -and -not $unloaded; $attempt++) {
+                    [gc]::Collect()
+                    [gc]::WaitForPendingFinalizers()
+                    Start-Sleep -Milliseconds (200 * $attempt)
+                    $null = reg.exe unload $t.Hive 2>&1
+                    if ($LASTEXITCODE -eq 0) { $unloaded = $true }
+                }
+                if (-not $unloaded) {
+                    Write-Log "  $($t.Label) :: hive $($t.Hive) could NOT be unloaded after 4 attempts - $($t.LoadPath) stays locked until reboot. The user may be unable to sign in until then." "ERROR"
+                }
             }
         }
     }

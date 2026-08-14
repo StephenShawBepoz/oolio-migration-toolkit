@@ -101,13 +101,26 @@ function Invoke-WindowsSwitchDHCP {
 
         if ($dhcp -eq "Enabled") {
             Write-Log "Adapter '$iface' is already on DHCP. No change needed."
-        } else {
+            continue
+        }
+        # Per-adapter try/catch so one failing adapter doesn't abort the rest.
+        try {
             Write-Log "Adapter '$iface' is on static IP. Switching to DHCP..."
+            # Enabling DHCP does not clear the persistent static default route -
+            # a stale 0.0.0.0/0 gateway survives (even across the final reboot)
+            # and leaves a dead or duplicate default route when the subnet
+            # changes. Remove it before flipping the interface.
+            Remove-NetRoute -InterfaceAlias $iface -AddressFamily IPv4 -DestinationPrefix "0.0.0.0/0" -Confirm:$false -ErrorAction SilentlyContinue
             Set-NetIPInterface -InterfaceAlias $iface -AddressFamily IPv4 -Dhcp Enabled -ErrorAction Stop
             Set-DnsClientServerAddress -InterfaceAlias $iface -ResetServerAddresses -ErrorAction SilentlyContinue
+            # Renew so the "new configuration" printout below shows the DHCP
+            # address rather than the lingering static one.
+            ipconfig /renew "$iface" 2>&1 | Out-Null
             Write-Log "Switched '$iface' to DHCP." "OK"
             Write-Log "Network may drop briefly while acquiring new IP address." "WARN"
             $switched++
+        } catch {
+            Write-Log "Could not switch '$iface' to DHCP: $($_.Exception.Message)" "ERROR"
         }
     }
 
@@ -123,14 +136,18 @@ function Invoke-WindowsSwitchDHCP {
 function Invoke-WindowsCleanDesktop {
     Write-Section "Removing Bepoz apps from desktop, taskbar, and Start menu"
 
-    # Matches a Bepoz shortcut either by its visible name or by where it points.
-    # Path matching is what catches renamed shortcuts ("Till", "Back Office").
-    # The alternatives are word-bounded, and 'paz' is additionally anchored to the
-    # start of the name: an unanchored 'paz' also matched "Topaz Signature Pad",
-    # "Pazzo Pizza", "La Paz" - real venue shortcuts that must never be deleted.
-    # '^paz\b' still catches Bepoz's own "Paz.lnk" / "Paz - Shortcut.lnk";
-    # 'tillpaz' is distinctive enough to float anywhere (TillPaz.exe targets).
-    $namePattern   = '\b(bepoz|backoffice|back ?office|tillpaz)\b|^paz\b'
+    # A shortcut is deleted when EITHER its name contains a distinctive Bepoz
+    # token OR its target points into C:\Bepoz. Two deliberate restrictions:
+    #
+    # 1. Only .lnk / .url files are ever considered. Venue documents that happen
+    #    to mention Bepoz ("Bepoz EOD Procedures.pdf", "Back Office Roster.xlsx")
+    #    are venue property - this step removes app entry points, not files.
+    # 2. Only DISTINCTIVE tokens delete by name alone. 'paz' is anchored to the
+    #    start of the name because unanchored it matched "Topaz Signature Pad",
+    #    "Pazzo Pizza", "La Paz". Generic names like "Back Office" do NOT delete
+    #    by name ("MYOB Back Office.lnk" is not ours) - Bepoz's own BackOffice
+    #    shortcut is caught by its C:\Bepoz\ target instead.
+    $strongPattern = '\b(bepoz|tillpaz)\b|^paz\b'
     $targetPattern = '\\Bepoz(\\|$| )'
 
     $shell   = New-Object -ComObject WScript.Shell
@@ -139,13 +156,14 @@ function Invoke-WindowsCleanDesktop {
 
     function Test-IsBepozShortcut {
         param([System.IO.FileInfo]$File)
-        if ($File.Name -match $namePattern) { return $true }
-        if ($File.Extension -ne '.lnk')     { return $false }
+        if ($File.Extension -ne '.lnk' -and $File.Extension -ne '.url') { return $false }
+        if ($File.Name -match $strongPattern) { return $true }
+        if ($File.Extension -ne '.lnk') { return $false }
         try {
             $lnk = $shell.CreateShortcut($File.FullName)
             $hay = "$($lnk.TargetPath) $($lnk.WorkingDirectory) $($lnk.Arguments)"
             if ($hay -match $targetPattern) { return $true }
-            if ($hay -match $namePattern)   { return $true }
+            if ($hay -match $strongPattern) { return $true }
         } catch {}
         return $false
     }
@@ -179,7 +197,7 @@ function Invoke-WindowsCleanDesktop {
         }
         # Drop any now-empty Bepoz program folders left behind.
         foreach ($dir in @(Get-ChildItem -Path $path -Directory -Recurse -ErrorAction SilentlyContinue |
-                            Where-Object { $_.Name -match $namePattern })) {
+                            Where-Object { $_.Name -match $strongPattern })) {
             if (-not (Get-ChildItem -Path $dir.FullName -Recurse -File -ErrorAction SilentlyContinue)) {
                 Remove-Item -Path $dir.FullName -Recurse -Force -ErrorAction SilentlyContinue
                 Write-Log "  Removed empty folder: $($dir.Name)" "OK"
@@ -206,14 +224,16 @@ function Invoke-WindowsCleanDesktop {
     }
 
     if ($unpinned -gt 0) {
-        $taskband = "HKCU:\Software\Microsoft\Windows\CurrentVersion\Explorer\Taskband"
-        Remove-ItemProperty -Path $taskband -Name "Favorites"        -Force -ErrorAction SilentlyContinue
-        Remove-ItemProperty -Path $taskband -Name "FavoritesResolve" -Force -ErrorAction SilentlyContinue
-        Write-Log "Cleared cached taskbar layout. Restarting Explorer to apply..."
+        # Only the Bepoz .lnk files were removed above. The Taskband registry
+        # blob (Explorer's cached pin layout) is deliberately left alone -
+        # deleting it resets EVERY pin on the taskbar, not just Bepoz's.
+        # Restarting Explorer makes it re-read the pin folder; an entry whose
+        # .lnk is gone drops off the bar on its own.
+        Write-Log "Restarting Explorer to refresh the taskbar..."
         Stop-Process -Name explorer -Force -ErrorAction SilentlyContinue
         Start-Sleep -Seconds 2
         if (-not (Get-Process -Name explorer -ErrorAction SilentlyContinue)) { Start-Process explorer.exe }
-        Write-Log "Explorer restarted." "OK"
+        Write-Log "Explorer restarted. Non-Bepoz pins are preserved." "OK"
     }
 
     Write-Log ""
@@ -707,6 +727,7 @@ function Invoke-WindowsUsbPower {
     }
 
     $changed = 0
+    $failed  = 0
     foreach ($pm in $pmObjects) {
         # MSPower InstanceName ends with an enumeration suffix like "_0"; strip it
         # to match the PnP InstanceId.
@@ -720,12 +741,15 @@ function Invoke-WindowsUsbPower {
                 $changed++
             } catch {
                 Write-Log "Could not update '$name': $($_.Exception.Message)" "WARN"
+                $failed++
             }
         }
     }
 
     if ($pmObjects.Count -eq 0) {
         Write-Log "No power-manageable devices reported. Nothing to change." "WARN"
+    } elseif ($failed -gt 0) {
+        Write-Log "$changed device(s) updated, $failed update(s) FAILED - see warnings above. Check Device Manager > Power Management for the affected devices." "ERROR"
     } elseif ($changed -eq 0) {
         Write-Log "All USB / serial devices already have power saving disabled." "OK"
     } else {

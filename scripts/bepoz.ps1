@@ -38,15 +38,26 @@ function Invoke-BepozStopSQL {
     $sqlServer = Get-BepozRegValue "SQL_Server"
     if (-not $sqlServer) { Write-Log "SQL_Server not found in registry. Skipping." "WARN"; return }
 
+    # HOST\INSTANCE -> named instance (service MSSQL$INSTANCE).
+    # Bare HOST / localhost / . -> DEFAULT instance (service MSSQLSERVER) - only
+    # when the host actually refers to this machine; a bare remote hostname means
+    # SQL lives on the venue server and there is nothing local to stop.
     $parts = $sqlServer.Split('\')
-    if ($parts.Length -lt 2) {
-        Write-Log "SQL_Server value '$sqlServer' is not in HOST\INSTANCE format. Skipping." "WARN"
-        return
+    if ($parts.Length -ge 2) {
+        $instanceName = $parts[1]
+        $serviceName  = "MSSQL`$$instanceName"
+        Write-Log "Named instance derived from registry: $instanceName"
+    } else {
+        $hostPart = $parts[0].Trim()
+        $isLocal = $hostPart -in @('.', '(local)', 'localhost', $env:COMPUTERNAME) -or
+                   $hostPart -ieq "$env:COMPUTERNAME"
+        if (-not $isLocal) {
+            Write-Log "SQL_Server '$sqlServer' points at a remote host - SQL is on the venue server. Skipping." "WARN"
+            return
+        }
+        $serviceName = "MSSQLSERVER"
+        Write-Log "SQL_Server '$sqlServer' is the local default instance."
     }
-    $instanceName = $parts[1]
-    Write-Log "Instance name derived from registry: $instanceName"
-
-    $serviceName = "MSSQL`$$instanceName"
     Write-Log "Checking service: $serviceName"
 
     $svc = Get-Service -Name $serviceName -ErrorAction SilentlyContinue
@@ -76,11 +87,20 @@ function Invoke-BepozZipData {
     $dataPath   = Get-BepozRegValue "DataPath"
     $backupPath = Get-BepozRegValue "BackupPath"
 
-    # Missing registry values are not errors here - just nothing to back up. The
-    # read-registry step already warned about them; downstream steps that need a
-    # value still report individually.
+    # A missing DataPath is only safe to skip when there genuinely is no data.
+    # If the registry entry is gone (e.g. delete-registry already ran on a
+    # previous attempt) but C:\Bepoz\Data still holds files, skipping here would
+    # let the migrate flow reach consolidate-backups with an unprotected data
+    # folder - so that case is an ERROR, not a skip.
     if (-not $dataPath) {
-        Write-Log "DataPath not present in registry. Nothing to back up - skipping." "WARN"
+        $fallbackData = "C:\Bepoz\Data"
+        $orphanFiles = @(Get-ChildItem -Path $fallbackData -Recurse -File -ErrorAction SilentlyContinue)
+        if ($orphanFiles.Count -gt 0) {
+            Write-Log "DataPath is not in the registry, but $fallbackData still contains $($orphanFiles.Count) file(s)." "ERROR"
+            Write-Log "Refusing to skip the backup. If the registry was already cleaned on a previous attempt, zip $fallbackData manually into C:\OolioBackup (Bepoz_Data_<date>.zip) before continuing." "WARN"
+            return
+        }
+        Write-Log "DataPath not present in registry and no files under $fallbackData. Nothing to back up - skipping." "WARN"
         return
     }
     if (-not $backupPath) {
@@ -221,15 +241,26 @@ function Invoke-BepozClearStartup {
     $startupPath = "$env:APPDATA\Microsoft\Windows\Start Menu\Programs\Startup"
     Write-Log "Startup folder: $startupPath"
 
-    $items = @(Get-ChildItem -Path $startupPath -ErrorAction SilentlyContinue)
+    # Items are moved to C:\OolioBackup, not deleted - the folder can contain
+    # venue-owned entries nobody remembers until they are gone. Oolio's own
+    # shortcuts are excluded so a re-run after module 4's set-startup step does
+    # not undo the freshly configured Oolio autostart.
+    $items = @(Get-ChildItem -Path $startupPath -ErrorAction SilentlyContinue |
+        Where-Object { $_.Name -notlike "Oolio*" })
     if ($items.Count -eq 0) {
-        Write-Log "Startup folder is already empty."
-    } else {
-        Write-Log "Found $($items.Count) item(s):"
-        foreach ($item in $items) { Write-Log "  - $($item.Name)" }
-        Remove-Item -Path "$startupPath\*" -Recurse -Force -ErrorAction SilentlyContinue
-        Write-Log "All startup items removed." "OK"
+        Write-Log "Startup folder has nothing to clear (Oolio entries, if any, are kept)."
+        return
     }
+
+    $backupDir = Join-Path "C:\OolioBackup" ("Startup_" + (Get-Date -Format "yyyyMMdd_HHmmss"))
+    New-Item -ItemType Directory -Path $backupDir -Force | Out-Null
+
+    Write-Log "Found $($items.Count) item(s) - moving to $backupDir"
+    foreach ($item in $items) {
+        Move-Item -Path $item.FullName -Destination $backupDir -Force -ErrorAction SilentlyContinue
+        Write-Log "  Moved: $($item.Name)" "OK"
+    }
+    Write-Log "Startup cleared. Restore any item by moving it back from $backupDir." "OK"
 }
 
 function Invoke-BepozCheckRunKey {
@@ -354,14 +385,50 @@ function Invoke-BepozConsolidateBackups {
         Write-Log "  $($d.Name) - $sz MB"
     }
 
-    # Safety guard: confirm at least one Bepoz_Data_*.zip is present before deletion.
-    $dataBackups = @($destZips | Where-Object { $_.Name -like "Bepoz_Data_*.zip" })
-    if ($dataBackups.Count -eq 0) {
-        Write-Log "No Bepoz_Data_*.zip found in $oolioBackup. ABORTING to protect data." "ERROR"
-        Write-Log "Run the zip-data step first if applicable, then retry." "WARN"
-        return
+    # Safety guard, two parts.
+    #
+    # The guard is driven by whether there is live data to protect RIGHT NOW, not
+    # by whether a zip merely exists: a Bepoz_Data zip from a previously aborted
+    # migration can be weeks old, and a venue that rolled back and kept trading
+    # has newer data on disk than in any backup. Deleting C:\Bepoz on the
+    # strength of a stale zip is unrecoverable data loss.
+    #
+    # 1. If C:\Bepoz holds data files (a Data folder with content, or a DataPath
+    #    from the registry that lives under C:\Bepoz), require a Bepoz_Data_*.zip
+    #    that is NEWER than the newest data file. A stale zip aborts.
+    # 2. If there is no local data (plain Till or KDS - zip-data never runs for
+    #    those types), no zip is required: there is nothing to protect.
+    $dataDirs = @()
+    $regDataPath = Get-BepozRegValue "DataPath"
+    if ($regDataPath -and $regDataPath -like "$bepozRoot*" -and (Test-Path $regDataPath)) { $dataDirs += $regDataPath }
+    $defaultData = Join-Path $bepozRoot "Data"
+    if ((Test-Path $defaultData) -and ($dataDirs -notcontains $defaultData)) { $dataDirs += $defaultData }
+
+    $newestData = $null
+    foreach ($dir in $dataDirs) {
+        $newest = Get-ChildItem -Path $dir -Recurse -File -ErrorAction SilentlyContinue |
+            Sort-Object LastWriteTime -Descending | Select-Object -First 1
+        if ($newest -and (-not $newestData -or $newest.LastWriteTime -gt $newestData.LastWriteTime)) { $newestData = $newest }
     }
-    Write-Log "Confirmed $($dataBackups.Count) data backup zip(s) in $oolioBackup." "OK"
+
+    if ($newestData) {
+        $dataBackups = @($destZips | Where-Object { $_.Name -like "Bepoz_Data_*.zip" })
+        if ($dataBackups.Count -eq 0) {
+            Write-Log "This terminal holds Bepoz data (newest file: $($newestData.LastWriteTime)) but no Bepoz_Data_*.zip exists in $oolioBackup." "ERROR"
+            Write-Log "ABORTING to protect data. Run the zip-data step, then retry." "WARN"
+            return
+        }
+        $newestZip = $dataBackups | Sort-Object LastWriteTime -Descending | Select-Object -First 1
+        if ($newestZip.LastWriteTime -lt $newestData.LastWriteTime) {
+            Write-Log "The newest data backup ($($newestZip.Name), $($newestZip.LastWriteTime)) is OLDER than the newest data file ($($newestData.Name), $($newestData.LastWriteTime))." "ERROR"
+            Write-Log "The venue has traded since that backup was taken - deleting C:\Bepoz now would lose that data." "ERROR"
+            Write-Log "ABORTING. Re-run the zip-data step to take a fresh backup, then retry this step." "WARN"
+            return
+        }
+        Write-Log "Data backup verified: $($newestZip.Name) ($($newestZip.LastWriteTime)) is newer than the newest data file ($($newestData.LastWriteTime))." "OK"
+    } else {
+        Write-Log "No Bepoz data files found under $bepozRoot - nothing to back up (normal for Till / KDS terminals)." "OK"
+    }
 
     # Now remove C:\Bepoz\ entirely.
     if (Test-Path $bepozRoot) {
