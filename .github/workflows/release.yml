@@ -1,10 +1,14 @@
-# Builds and publishes OolioMigration.zip whenever a v* tag is pushed.
+# Builds and publishes OolioMigration.zip.
 #
-#   git tag v1.6 && git push origin v1.6     <- this IS the release process
+# Two ways to release:
+#   1. Push a v* tag:        git tag v1.6 && git push origin v1.6
+#   2. Run this workflow from the Actions tab (workflow_dispatch) with the tag
+#      as input - the workflow creates the tag at the commit it builds. This
+#      exists for environments whose git remotes cannot push tag refs.
 #
-# The workflow refuses to ship if TOOLKIT_VERSION in ui/app.js does not match
-# the tag, so the version badge technicians see can never drift from the
-# release they installed. bootstrap.ps1 picks the new asset up automatically
+# Either way, the workflow refuses to ship if TOOLKIT_VERSION in ui/app.js does
+# not match the tag, so the version badge technicians see can never drift from
+# the release they installed. bootstrap.ps1 picks the new asset up automatically
 # via releases/latest/download/ - no other step needed.
 
 name: release
@@ -13,9 +17,15 @@ on:
   push:
     tags:
       - 'v*'
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Release tag to create at this commit (e.g. v1.6)"
+        required: true
+        type: string
 
 permissions:
-  contents: write   # create the release + upload the asset
+  contents: write   # create the tag + release, upload the asset
 
 jobs:
   release:
@@ -23,10 +33,22 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - name: Resolve tag
+        id: tag
+        shell: pwsh
+        run: |
+          $tag = if ('${{ github.event_name }}' -eq 'workflow_dispatch') { '${{ inputs.tag }}' } else { '${{ github.ref_name }}' }
+          if ($tag -notmatch '^v\d') {
+            Write-Host "::error::'$tag' does not look like a release tag (expected v<major>...)."
+            exit 1
+          }
+          "tag=$tag" >> $env:GITHUB_OUTPUT
+          Write-Host "Releasing as: $tag"
+
       - name: Verify TOOLKIT_VERSION matches the tag
         shell: pwsh
         run: |
-          $tag = '${{ github.ref_name }}'
+          $tag = '${{ steps.tag.outputs.tag }}'
           $appJs = Get-Content ui/app.js -Raw
           if ($appJs -notmatch "const TOOLKIT_VERSION = '([^']+)'") {
             Write-Host "::error::TOOLKIT_VERSION not found in ui/app.js"
@@ -47,12 +69,31 @@ jobs:
         shell: pwsh
         run: ./build-release.ps1
 
+      - name: Create tag (dispatch only)
+        if: github.event_name == 'workflow_dispatch'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          TAG='${{ steps.tag.outputs.tag }}'
+          if gh api "repos/${{ github.repository }}/git/ref/tags/$TAG" >/dev/null 2>&1; then
+            EXISTING=$(gh api "repos/${{ github.repository }}/git/ref/tags/$TAG" --jq .object.sha)
+            if [ "$EXISTING" != "${{ github.sha }}" ]; then
+              echo "::error::Tag $TAG already exists at $EXISTING (this build is ${{ github.sha }}). Delete it or pick a new version."
+              exit 1
+            fi
+            echo "Tag $TAG already exists at this commit."
+          else
+            gh api "repos/${{ github.repository }}/git/refs" \
+              -f ref="refs/tags/$TAG" -f sha='${{ github.sha }}'
+            echo "Created tag $TAG at ${{ github.sha }}"
+          fi
+
       - name: Create GitHub release
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          gh release create '${{ github.ref_name }}' \
+          gh release create '${{ steps.tag.outputs.tag }}' \
             'dist/OolioMigration.zip' \
-            --title '${{ github.ref_name }}' \
+            --title '${{ steps.tag.outputs.tag }}' \
             --notes 'See CHANGELOG.md for details. Install with the bootstrap one-liner in README.md.' \
             --verify-tag
