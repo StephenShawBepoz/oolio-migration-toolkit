@@ -4,6 +4,25 @@ All notable changes to the Oolio Migration Toolkit. Newest first.
 
 ## Unreleased
 
+### Removed
+- **`check-join`** (detect domain / Azure AD join state), **`locale-time`** (locale + NTP), **`verify-autologon`**, **`rename-device`**, **`check-chrome`** (Chrome install), and **`printer-utilities`** (links-only) steps, with their functions, router entries, progress defaults, and UI definitions.
+- Autologon is no longer configured by the toolkit — it is expected on the device image. The `set-startup` step still reports its state read-only, so a terminal that would stop at the login screen is caught before go-live. The credential plumbing (`POST /input` stash, per-child env vars, CSRF) is deliberately left intact with an empty `SECRET_STEPS` map so any future secret-bearing step cannot regress to query parameters.
+- Google Chrome is assumed present on the device image. The shortcut steps still detect it and give an actionable error if missing.
+- `printer-utilities` is superseded by the new EpsonNet Config step.
+
+### Added
+- **`default-browser`** — enforces Microsoft Edge for `http`, `https`, `.htm`, `.html`, `.pdf` via the `DefaultAssociationsConfiguration` policy, which applies to every user at sign-in. Redirects Internet Explorer launches into Edge and disables the IE11 optional feature. The per-user `UserChoice` key is hash-protected and cannot be written directly, so policy is the only supported route; it takes effect at the next sign-in.
+- **`usb-power`** — disables USB selective suspend in the active power plan and clears "allow the computer to turn off this device to save power" on every present USB and COM device via `MSPower_DeviceEnable`. The usual cause of printers, cash drawers, and scanners dropping off mid-shift. Complements `power-plan`, which covers standby/monitor/disk/hibernate but not USB.
+- **`check-epsonnet-config`** — downloads ENCU from `ftp.epson.com`, verifies the Epson Authenticode signature, then launches the wizard for manual click-through while polling for completion. The installer is a WinZip SFX around InstallShield: neither layer honours `/S` or `/SILENT`, and InstallShield ignores synthetic `BM_CLICK` messages, so automation was tried and abandoned.
+- Favicon icons on the POS / CDS / KDS shortcuts, fetched from each site into `C:\Oolio\Assets\`, with a graceful fall back to the Chrome default icon.
+
+### Changed
+- **`enable-firewall`** also sets every active network to the Private profile (domain-authenticated networks are left alone — Windows owns that classification) and enables File and Printer Sharing plus Network Discovery **scoped to Private only**, so nothing is opened up on a Public network. Starts the Function Discovery services so shared printers are actually reachable.
+- **`clean-desktop`** no longer wipes both desktops. It now removes only Bepoz shortcuts, across both desktops, the Start menu (recursive, including empty Bepoz folders), and taskbar pins — matching on shortcut name *and* on target path so renamed shortcuts are still caught. Explorer is restarted only if a pin was removed. Now runs for `T` and `KDS` as well as `ST`.
+- POS and CDS shortcuts moved from `--kiosk` to `--app=<url> --start-fullscreen`, matching KDS. Kiosk mode leaves no way out on a touchscreen terminal with no physical keyboard; app mode is equally chrome-free but exits with the Windows key or Alt+F4. All three also pass `--disable-pinch`.
+- TeamViewer install polls up to 3 minutes for `TeamViewer.exe` instead of checking once immediately after the installer exits. The `/S` installer hands off to a background service installer and exits early, which was reporting false failures on successful installs.
+
+
 ### Changed
 - **The Oolio POS native installer is no longer committed to git or bundled in the release zip.** `installers/POS-prod-green-7.9.2-*.exe` was 35.1 MB — 99% of a 34.99 MB release asset — and only Windows-app deployments ever needed it. The release zip is now **~0.13 MB**. `installers/*.exe` is gitignored so it cannot be re-committed by accident.
 - `installers/` still ships as a folder with its README, so the drop path exists on the terminal. Technicians running a Windows-app deployment copy the current `POS-*-installer.exe` in before running that step; Chrome deployments need nothing.

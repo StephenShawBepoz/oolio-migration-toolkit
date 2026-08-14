@@ -15,8 +15,8 @@ function Get-StepFunctionName {
             "consolidate-backups"  = "Invoke-BepozConsolidateBackups"
         }
         "windows" = @{
-            "check-join"       = "Invoke-WindowsCheckJoin"
-            "verify-autologon" = "Invoke-WindowsVerifyAutologon"
+            "default-browser"  = "Invoke-WindowsDefaultBrowser"
+            "usb-power"        = "Invoke-WindowsUsbPower"
             "enable-firewall"  = "Invoke-WindowsEnableFirewall"
             "active-hours"     = "Invoke-WindowsActiveHours"
             "harden-pos"       = "Invoke-WindowsHardenPOS"
@@ -24,15 +24,13 @@ function Get-StepFunctionName {
             "disable-multitouch"    = "Invoke-WindowsDisableMultitouch"
             "power-plan"            = "Invoke-WindowsPowerPlan"
             "disable-distractions"  = "Invoke-WindowsDisableDistractions"
-            "locale-time"           = "Invoke-WindowsLocaleTime"
             "check-ip"         = "Invoke-WindowsCheckIP"
             "switch-dhcp"      = "Invoke-WindowsSwitchDHCP"
-            "rename-device"    = "Invoke-WindowsRenameDevice"
             "clean-desktop"    = "Invoke-WindowsCleanDesktop"
             "set-wallpaper"    = "Invoke-WindowsSetWallpaper"
         }
         "dependencies" = @{
-            "check-chrome"     = "Invoke-DepsCheckChrome"
+            "check-epsonnet-config" = "Invoke-DepsCheckEpsonNetConfig"
             "check-webview2"   = "Invoke-DepsCheckWebView2"
             "teamviewer"       = "Invoke-DepsInstallTeamViewer"
         }

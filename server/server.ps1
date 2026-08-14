@@ -33,27 +33,24 @@ function Get-DefaultProgress {
             "consolidate-backups"  = "pending"
         }
         windows = @{
-            "check-join"       = "pending"
-            "verify-autologon" = "pending"
             "enable-firewall"  = "pending"
+            "default-browser"  = "pending"
+            "usb-power"        = "pending"
             "active-hours"     = "pending"
             "harden-pos"       = "pending"
             "touch-pos"            = "pending"
             "disable-multitouch"   = "pending"
             "power-plan"           = "pending"
             "disable-distractions" = "pending"
-            "locale-time"          = "pending"
             "check-ip"         = "pending"
             "switch-dhcp"      = "pending"
-            "rename-device"    = "pending"
             "clean-desktop"    = "pending"
             "set-wallpaper"    = "pending"
         }
         dependencies = @{
-            "check-chrome"      = "pending"
-            "check-webview2"    = "pending"
-            "teamviewer"        = "pending"
-            "printer-utilities" = "pending"
+            "check-webview2"        = "pending"
+            "teamviewer"            = "pending"
+            "check-epsonnet-config" = "pending"
         }
         oolio = @{
             "deployment-config"  = "pending"
@@ -66,7 +63,6 @@ function Get-DefaultProgress {
             "final-restart"      = "pending"
         }
         meta = @{
-            terminalName    = ""
             terminalType    = ""
             hasCDS          = $false
             deploymentMode  = ""
@@ -373,38 +369,18 @@ function Invoke-StepStreaming {
 
         $value = $Params["value"]
 
-        # Build a child-PowerShell command. Non-secret args go on the command
-        # line; secrets (verify-autologon credentials) go through environment
-        # variables so they never appear in Process Explorer, Sysmon, or ETW.
+        # Build a child-PowerShell command. No step takes secrets any more - the
+        # autologon step (the only credential consumer) was removed - but the
+        # $childEnv plumbing and the POST /input stash are left intact so a future
+        # secret-bearing step cannot accidentally regress to query parameters.
         $argSegment = ""
         $childEnv = @{}
-        if ($StepId -eq "rename-device") {
-            $argSegment = " -terminalName " + (Quote-PSLiteral $value)
-        } elseif ($StepId -eq "set-wallpaper") {
+        if ($StepId -eq "set-wallpaper") {
             $argSegment = " -toolkitRoot " + (Quote-PSLiteral $ToolkitRoot)
         } elseif ($StepId -eq "install-pos-app") {
             $argSegment = " -toolkitRoot " + (Quote-PSLiteral $ToolkitRoot)
-        } elseif ($StepId -eq "verify-autologon") {
-            # Credentials reach the child via ProcessStartInfo environment
-            # variables, so they never touch the parent's own environment, the
-            # child's command line, or any process-monitoring tooling. Prefer
-            # the POST /input stash (kept out of the /run URL and browser
-            # history); fall back to query params for backward compatibility.
-            $stash = $script:PendingSecrets[$stepKey]
-            if ($stash) {
-                $childEnv["OOLIO_AL_USERNAME"] = [string]$stash.username
-                $childEnv["OOLIO_AL_PASSWORD"] = [string]$stash.password
-                $childEnv["OOLIO_AL_DOMAIN"]   = [string]$stash.domain
-                $script:PendingSecrets.Remove($stepKey)
-            } else {
-                $childEnv["OOLIO_AL_USERNAME"] = [string]$Params["username"]
-                $childEnv["OOLIO_AL_PASSWORD"] = [string]$Params["password"]
-                $childEnv["OOLIO_AL_DOMAIN"]   = [string]$Params["domain"]
-            }
         } elseif ($StepId -eq "active-hours") {
             $argSegment = " -updateHour " + (Quote-PSLiteral $value)
-        } elseif ($StepId -eq "locale-time") {
-            $argSegment = " -timeZone " + (Quote-PSLiteral $value)
         }
 
         $command = ". '$sharedScript'; . '$moduleScriptPath'; $functionName$argSegment"

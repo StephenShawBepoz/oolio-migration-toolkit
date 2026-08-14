@@ -14,6 +14,24 @@ function Invoke-OolioCreateFolders {
     }
 }
 
+# Fetch a site favicon into C:\Oolio\Assets and return the path, or $null if the
+# download fails. Used to give each Oolio shortcut its own icon instead of the
+# generic Chrome one.
+function Get-OolioSiteIcon {
+    param([string]$Url, [string]$FileName, [string]$Label)
+
+    $assetsDir = "C:\Oolio\Assets"
+    if (-not (Test-Path $assetsDir)) { New-Item -ItemType Directory -Path $assetsDir -Force | Out-Null }
+    $iconPath = Join-Path $assetsDir $FileName
+
+    if (Invoke-DownloadWithHeartbeat -Url $Url -OutFile $iconPath -ProgressLabel "Downloading $Label icon") {
+        Write-Log "Downloaded icon: $iconPath" "OK"
+        return $iconPath
+    }
+    Write-Log "Could not download the $Label favicon - shortcut will use the Chrome default icon." "WARN"
+    return $null
+}
+
 function Get-ChromePath {
     $p1 = "C:\Program Files\Google\Chrome\Application\chrome.exe"
     $p2 = "C:\Program Files (x86)\Google\Chrome\Application\chrome.exe"
@@ -27,7 +45,7 @@ function Invoke-OolioInstallPOSChrome {
 
     $chromePath = Get-ChromePath
     if (-not $chromePath) {
-        Write-Log "Chrome not found. Install Chrome in the dependencies module first." "ERROR"
+        Write-Log "Chrome not found. Install Google Chrome on this device, then re-run this step." "ERROR"
         return
     }
 
@@ -35,8 +53,10 @@ function Invoke-OolioInstallPOSChrome {
     $shell    = New-Object -ComObject WScript.Shell
     $shortcut = $shell.CreateShortcut($shortcutPath)
     $shortcut.TargetPath  = $chromePath
-    $shortcut.Arguments   = "--kiosk https://pos.oolio.io --no-first-run --disable-infobars"
+    $shortcut.Arguments   = "--app=https://pos.oolio.io --start-fullscreen --no-first-run --disable-infobars --disable-pinch"
     $shortcut.WindowStyle = 3
+    $icon = Get-OolioSiteIcon -Url "https://pos.oolio.io/favicon.ico" -FileName "pos-icon.ico" -Label "POS"
+    if ($icon) { $shortcut.IconLocation = "$icon,0" }
     $shortcut.Save()
 
     Write-Log "Shortcut created: $shortcutPath" "OK"
@@ -48,7 +68,7 @@ function Invoke-OolioInstallCDSChrome {
 
     $chromePath = Get-ChromePath
     if (-not $chromePath) {
-        Write-Log "Chrome not found. Install Chrome in the dependencies module first." "ERROR"
+        Write-Log "Chrome not found. Install Google Chrome on this device, then re-run this step." "ERROR"
         return
     }
 
@@ -74,8 +94,10 @@ function Invoke-OolioInstallCDSChrome {
     $shell    = New-Object -ComObject WScript.Shell
     $shortcut = $shell.CreateShortcut($shortcutPath)
     $shortcut.TargetPath  = $chromePath
-    $shortcut.Arguments   = "--kiosk https://cds.oolio.io --no-first-run --disable-infobars --window-position=$offsetX,0"
+    $shortcut.Arguments   = "--app=https://cds.oolio.io --start-fullscreen --no-first-run --disable-infobars --disable-pinch --window-position=$offsetX,0"
     $shortcut.WindowStyle = 3
+    $icon = Get-OolioSiteIcon -Url "https://cds.oolio.io/favicon.ico" -FileName "cds-icon.ico" -Label "CDS"
+    if ($icon) { $shortcut.IconLocation = "$icon,0" }
     $shortcut.Save()
 
     Write-Log "Shortcut created: $shortcutPath" "OK"
@@ -87,7 +109,7 @@ function Invoke-OolioInstallKDSChrome {
 
     $chromePath = Get-ChromePath
     if (-not $chromePath) {
-        Write-Log "Chrome not found. Install Chrome in the dependencies module first." "ERROR"
+        Write-Log "Chrome not found. Install Google Chrome on this device, then re-run this step." "ERROR"
         return
     }
 
@@ -97,8 +119,10 @@ function Invoke-OolioInstallKDSChrome {
     $shortcut.TargetPath  = $chromePath
     # --app runs kds.oolio.io as a standalone "installed app" window (no tabs/omnibox);
     # --start-fullscreen opens it fullscreen. Differs from POS/CDS which use --kiosk.
-    $shortcut.Arguments   = "--app=https://kds.oolio.io --start-fullscreen --no-first-run --disable-infobars"
+    $shortcut.Arguments   = "--app=https://kds.oolio.io --start-fullscreen --no-first-run --disable-infobars --disable-pinch"
     $shortcut.WindowStyle = 3
+    $icon = Get-OolioSiteIcon -Url "https://kds.oolio.io/favicon.ico" -FileName "kds-icon.ico" -Label "KDS"
+    if ($icon) { $shortcut.IconLocation = "$icon,0" }
     $shortcut.Save()
 
     Write-Log "Shortcut created: $shortcutPath" "OK"

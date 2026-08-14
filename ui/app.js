@@ -48,17 +48,12 @@ const MODULES = [
         description: 'Verify autologon, firewall, network, then rename / clean the device.',
         showInTypes: ['S', 'ST', 'T', 'KDS'],
         steps: [
-            { id: 'check-join',       title: 'Detect domain / Azure AD join state', risk: 'safe', showInTypes: ['S','ST','T','KDS'],
-              note: 'Reports whether this terminal is standalone, AD-joined, Azure AD-joined, or hybrid. Managed terminals may have Group Policy or Intune that overrides several hardening steps - this surfaces that risk before you spend time on changes that will be reverted at the next policy refresh.' },
-            { id: 'verify-autologon', title: 'Verify & enable autologon', risk: 'warn', showInTypes: ['S','ST','T','KDS'],
-              requiresInputs: [
-                { name: 'username', label: 'Username', placeholder: 'e.g. POSUser' },
-                { name: 'password', label: 'Password', placeholder: '', type: 'password' },
-                { name: 'domain',   label: 'Domain (optional)', placeholder: 'leave blank for local machine' }
-              ],
-              note: 'Reads the Winlogon registry to confirm autologon. If autologon is off and you fill the form, the toolkit writes the autologon registry values. Password lands in plaintext at HKLM\\Software\\Microsoft\\Windows NT\\CurrentVersion\\Winlogon - standard AutoAdminLogon mechanism.'
-            },
-            { id: 'enable-firewall',  title: 'Enable Windows Firewall', risk: 'warn', showInTypes: ['S','ST','T','KDS'], note: 'Enables firewall for Domain, Private, and Public profiles.' },
+            { id: 'enable-firewall',  title: 'Firewall, Private network & sharing', risk: 'warn', showInTypes: ['S','ST','T','KDS'],
+              note: 'Turns the firewall on for Domain, Private, and Public profiles. Sets every active network to the Private profile (domain-authenticated networks are left alone - Windows owns that classification). Enables File and Printer Sharing plus Network Discovery on the Private profile only, and starts the Function Discovery services so shared printers are reachable.' },
+            { id: 'default-browser',  title: 'Set Microsoft Edge as default browser', risk: 'warn', showInTypes: ['S','ST','T','KDS'],
+              note: 'Enforces Edge as the default for http, https, .htm, .html and .pdf via the DefaultAssociationsConfiguration policy, which applies to every user at sign-in. Also redirects any Internet Explorer launch into Edge and disables the IE11 optional feature. Takes effect at the next sign-in.' },
+            { id: 'usb-power',        title: 'Disable USB / serial port power saving', risk: 'warn', showInTypes: ['ST','T','KDS'],
+              note: 'Stops Windows powering down USB and serial/COM devices to save energy - the usual cause of printers, cash drawers, and scanners "dropping off" during a shift. Disables USB selective suspend in the active power plan and clears the "allow the computer to turn off this device" checkbox on every present USB and COM device. Complements the power plan step, which covers standby and monitor timeouts but not USB. Re-run after adding new peripherals.' },
             { id: 'active-hours',     title: 'Configure Windows Update active hours', risk: 'warn', showInTypes: ['S','ST','T','KDS'],
               requiresInputs: [{ name: 'value', label: 'Update window hour (24h, 0-23)', placeholder: '3' }],
               note: 'Locks Windows Update active hours via Group Policy. Updates only install in a 6-hour window centred on the supplied hour. Recommended: 3 (3am). Also clears NoAutoRebootWithLoggedOnUsers so the autologon user does not block reboots.' },
@@ -72,14 +67,9 @@ const MODULES = [
               note: 'Sets sleep, monitor, hibernate, and disk-spindown timeouts to 0 on AC and DC, disables hibernation entirely (reclaims hiberfil.sys), turns off Fast Startup so reboots are real reboots, and sets lid-close action to do nothing.' },
             { id: 'disable-distractions', title: 'Disable notifications, Game Bar, Copilot, Storage Sense', risk: 'warn', showInTypes: ['ST','T','KDS'],
               note: 'Disables toast notifications and Notification Center, Xbox Game Bar / Game DVR, Windows Copilot, Storage Sense (so backup zips aren\'t auto-deleted), the Search box, Task View button, and Widgets icon on the taskbar. Idempotent.' },
-            { id: 'locale-time',      title: 'Locale and time (en-AU + NTP sync)', risk: 'safe', showInTypes: ['ST','T','KDS'],
-              requiresInputs: [{ name: 'value', label: 'Time zone (Windows ID)', placeholder: 'AUS Eastern Standard Time' }],
-              note: 'Sets the Windows time zone, points w32time at au.pool.ntp.org with fallbacks, forces an NTP resync, and sets system locale / user language / culture to en-AU (GeoId 12 = Australia). Run "tzutil /l" to see valid zone names if Sydney/Melbourne is not the right pick.' },
             { id: 'check-ip',         title: 'Check IP configuration', risk: 'safe', showInTypes: ['S','ST','T','KDS'], note: 'Shows current IP and DHCP status for every active adapter. If a static IP is detected, the migrate flow surfaces a "Switch to DHCP" prompt as an inline action.' },
-            { id: 'rename-device',    title: 'Rename device', risk: 'warn', showInTypes: ['S','ST','T','KDS'], optional: true,
-              requiresInputs: [{ name: 'value', label: 'Suffix (after "Oolio-")', placeholder: 'POS1', prefix: 'Oolio-' }],
-              note: 'Optional. Renames the device to Oolio-<suffix>. Skip if the device is already correctly named. Effective after the final restart.' },
-            { id: 'clean-desktop',    title: 'Clean desktop',      risk: 'warn', showInTypes: ['ST','KDS'], note: 'Removes everything from user and public desktop. Server-till and KDS only.' },
+            { id: 'clean-desktop',    title: 'Remove Bepoz apps from desktop, taskbar & Start', risk: 'warn', showInTypes: ['ST','T','KDS'],
+              note: 'Removes Bepoz shortcuts from both desktops, the Start menu (recursive, including empty Bepoz folders), and taskbar pins. Matches on shortcut name and on where the shortcut points, so renamed shortcuts are still caught. Non-Bepoz shortcuts are left untouched. Restarts Explorer if any taskbar pin was removed.' },
             { id: 'set-wallpaper',    title: 'Apply Oolio wallpaper', risk: 'safe', showInTypes: ['ST','KDS'], note: 'Copies assets/wallpaper.jpg to C:\\Oolio\\Assets and applies it. Server-till and KDS only.' }
         ]
     },
@@ -90,20 +80,10 @@ const MODULES = [
         description: 'Verify or install Chrome and WebView2, plus printer utility links.',
         showInTypes: ['ST', 'KDS'],
         steps: [
-            { id: 'check-chrome',      title: 'Check / install Google Chrome', risk: 'safe', showInTypes: ['ST','KDS'], note: 'Reports Chrome install path and version. If Chrome is missing, downloads the Google Enterprise MSI and installs it silently (msiexec /qn). Requires internet at this step.' },
             { id: 'check-webview2',    title: 'Check / install Edge WebView2', risk: 'safe', showInTypes: ['ST'], note: 'Required for Windows native Oolio POS and CDS apps. If missing, downloads the Microsoft Evergreen Bootstrapper and installs silently (/silent /install). Requires internet at this step.' },
+            { id: 'check-epsonnet-config', title: 'Check / install EpsonNet Config', risk: 'safe', showInTypes: ['ST'],
+              note: 'Network configuration utility for Epson printers. Detects an existing install via known paths and the uninstall registry. If missing, downloads ENCU from ftp.epson.com and verifies the Epson signature, then launches the wizard - the installer is a WinZip SFX around InstallShield and cannot be silenced, so the technician clicks through while the toolkit polls for completion. Requires internet.' },
             { id: 'teamviewer',        title: 'Check / install TeamViewer', risk: 'safe', showInTypes: ['ST','KDS'], note: 'Reports TeamViewer install path and version. If missing, downloads the full TeamViewer installer (TeamViewer_Setup_x64.exe) and installs silently with /S. Requires internet at this step.' },
-            { id: 'printer-utilities', title: 'Printer utilities',   risk: 'safe', showInTypes: ['ST'], linksOnly: true,
-              links: [
-                { label: 'Epson TM Utility',                href: 'https://download.epson-biz.com/modules/pos/' },
-                { label: 'Epson Firmware Updater',          href: 'https://download.epson-biz.com/modules/pos/' },
-                { label: 'Star Utility (TSP / mC-Print)',   href: 'https://www.starmicronics.com/support/allproducts' },
-                { label: 'Star Firmware Updater',           href: 'https://www.starmicronics.com/support/allproducts' },
-                { label: 'Bixolon Utility and Firmware',    href: 'https://www.bixolon.com/sub_support_down.php' },
-                { label: 'Element / Gravity Utility (pending Oolio confirmation)', href: '#' }
-              ],
-              note: 'Open each utility download in your browser. No PowerShell execution. Mark done once installed/handled.'
-            }
         ]
     },
     {
@@ -113,13 +93,13 @@ const MODULES = [
         description: 'Set deployment options, create folders and shortcuts, schedule the final restart.',
         showInTypes: ['ST', 'KDS'],
         steps: [
-            { id: 'deployment-config',  title: 'Deployment options',         risk: 'safe', configStep: true, showInTypes: ['ST'], note: 'Choose deployment mode - the native Windows app (installer bundled in the toolkit) or the Chrome kiosk - and whether a CDS is present.' },
+            { id: 'deployment-config',  title: 'Deployment options',         risk: 'safe', configStep: true, showInTypes: ['ST'], note: 'Choose deployment mode - the native Windows app (installer bundled in the toolkit) or the Chrome fullscreen shortcut - and whether a CDS is present.' },
             { id: 'create-folders',     title: 'Create Oolio folders',       risk: 'safe', showInTypes: ['ST','KDS'], note: 'Creates C:\\Oolio and Assets/Certs/Logs subfolders.' },
-            { id: 'install-pos-app',    title: 'Install Oolio POS (native Windows app)', risk: 'safe', showInTypes: ['ST'], note: 'Runs installers\\POS-*-installer.exe silently (electron-builder NSIS, /S, per-machine to Program Files), detects the installed executable, and drops an "Oolio POS" shortcut on the Public desktop for the startup step to pick up. This native app replaces the Chrome kiosk. The installer is NOT bundled with the toolkit (~35 MB) - copy POS-*-installer.exe into the toolkit installers\\ folder on this terminal before running this step.', showWhen: m => m.deploymentMode === 'windows' },
-            { id: 'install-pos-chrome', title: 'Create Oolio POS shortcut (Chrome kiosk)', risk: 'safe', showInTypes: ['ST'], note: 'Public-desktop shortcut launching pos.oolio.io fullscreen.', showWhen: m => m.deploymentMode === 'chrome' },
-            { id: 'install-cds-chrome', title: 'Create Oolio CDS shortcut (Chrome kiosk)', risk: 'safe', showInTypes: ['ST'], note: 'Public-desktop shortcut launching cds.oolio.io on the second display. The CDS is always a Chrome kiosk page, so this shows whenever a CDS is present regardless of POS deployment mode (needs Chrome installed).', showWhen: m => m.hasCDS === true },
-            { id: 'install-kds-chrome', title: 'Create Oolio KDS shortcut (Chrome app)', risk: 'safe', showInTypes: ['KDS'], note: 'Public-desktop shortcut "Oolio KDS" launching kds.oolio.io as a fullscreen Chrome app window (--app + --start-fullscreen).' },
-            { id: 'set-startup',        title: 'Configure startup',          risk: 'warn', showInTypes: ['ST','KDS'], note: 'Copies the Oolio desktop shortcut(s) into shell:startup so the kiosk launches when the autologon user signs in. Also tidies up legacy HKCU Run entries from older toolkit builds.' },
+            { id: 'install-pos-app',    title: 'Install Oolio POS (native Windows app)', risk: 'safe', showInTypes: ['ST'], note: 'Runs installers\\POS-*-installer.exe silently (electron-builder NSIS, /S, per-machine to Program Files), detects the installed executable, and drops an "Oolio POS" shortcut on the Public desktop for the startup step to pick up. This native app replaces the Chrome fullscreen shortcut. The installer is NOT bundled with the toolkit (~35 MB) - copy POS-*-installer.exe into the toolkit installers\\ folder on this terminal before running this step.', showWhen: m => m.deploymentMode === 'windows' },
+            { id: 'install-pos-chrome', title: 'Create Oolio POS shortcut (Chrome fullscreen)', risk: 'safe', showInTypes: ['ST'], note: 'Public-desktop shortcut launching pos.oolio.io in Chrome app mode - fullscreen, no browser UI, pinch-zoom disabled, with the site favicon as its icon. Exits with the Windows key or Alt+F4, unlike kiosk mode.', showWhen: m => m.deploymentMode === 'chrome' },
+            { id: 'install-cds-chrome', title: 'Create Oolio CDS shortcut (Chrome fullscreen)', risk: 'safe', showInTypes: ['ST'], note: 'Public-desktop shortcut launching cds.oolio.io in Chrome app mode on the second display, with the site favicon as its icon.', showWhen: m => m.hasCDS === true },
+            { id: 'install-kds-chrome', title: 'Create Oolio KDS shortcut (Chrome fullscreen)', risk: 'safe', showInTypes: ['KDS'], note: 'Public-desktop shortcut "Oolio KDS" launching kds.oolio.io as a fullscreen Chrome app window (--app + --start-fullscreen).' },
+            { id: 'set-startup',        title: 'Configure startup',          risk: 'warn', showInTypes: ['ST','KDS'], note: 'Copies the Oolio desktop shortcut(s) into shell:startup so Oolio launches when the autologon user signs in. Also tidies up legacy HKCU Run entries from older toolkit builds.' },
             { id: 'final-restart',      title: 'Schedule final restart',     risk: 'danger', showInTypes: ['ST','KDS'], note: 'Schedules a 30-second restart so the device rename, wallpaper, and autologon changes take effect. Run "shutdown /a" from a command prompt to cancel.',
               preview: ['Runs: shutdown /r /t 30. The terminal restarts in 30 seconds.', 'No data is destroyed - this only reboots so device-rename, wallpaper, and autologon take effect.', 'Cancel with: shutdown /a (from any command prompt within 30 seconds).'] }
         ]
@@ -267,7 +247,7 @@ function setStepStatus(moduleId, stepId, status) {
 //
 // Walks every module's visible steps in order and classifies each pending step as:
 //   - auto-run   : safe enough to run unattended in the migrate loop
-//   - pause-form : needs technician input via inputs (verify-autologon, rename-device)
+//   - pause-form : needs technician input via inputs (active-hours)
 //   - pause-config: terminal-type configuration form
 //   - pause-manual: link-only step that needs the technician to do something off-script
 //   - pause-confirm: danger step requiring a confirmation tick before running
@@ -299,23 +279,9 @@ function getNextMigrateAction() {
 }
 
 function getStepExtras(stepId) {
-    if (stepId === 'rename-device') {
-        return { value: state.inputValues['windows.rename-device.value'] || '' };
-    }
-    if (stepId === 'verify-autologon') {
-        const k = 'windows.verify-autologon';
-        return {
-            username: state.inputValues[k + '.username'] || '',
-            password: state.inputValues[k + '.password'] || '',
-            domain:   state.inputValues[k + '.domain']   || ''
-        };
-    }
     if (stepId === 'active-hours') {
         // Default to 3 (3am) when the tech leaves the field blank.
         return { value: state.inputValues['windows.active-hours.value'] || '3' };
-    }
-    if (stepId === 'locale-time') {
-        return { value: state.inputValues['windows.locale-time.value'] || 'AUS Eastern Standard Time' };
     }
     return {};
 }
@@ -489,7 +455,10 @@ async function runStep(moduleId, stepId, extras) {
     // persist in browser history on the terminal. Stash them server-side via
     // POST /input first; the server hands them to the step as environment
     // variables and clears the stash after one use.
-    const SECRET_STEPS = { 'verify-autologon': ['username', 'password', 'domain'] };
+    // No step currently takes secrets - the autologon step was removed. The
+    // mechanism is kept so any future secret-bearing step routes through
+    // POST /input rather than regressing to query parameters.
+    const SECRET_STEPS = {};
     const secretFields = SECRET_STEPS[stepId];
     if (secretFields && secretFields.some(f => params[f])) {
         const fields = {};
@@ -775,15 +744,10 @@ function renderPauseCard(action) {
     }
 
     // pause-form / pause-confirm: show inputs and / or danger checkbox, then Run & continue.
+    // Every remaining input is optional (active-hours defaults to 3), so the Run
+    // button is gated only on the danger confirmation.
     const inputs = step.requiresInputs || [];
-    const requiredFieldsFilled = inputs.every(inp => {
-        if (action.stepId === 'rename-device' && inp.name === 'value') {
-            const v = state.inputValues[key + '.' + inp.name] || '';
-            return v.trim().length > 0;
-        }
-        return true;
-    });
-    const runDisabled = (isDanger && !confirmed) || !requiredFieldsFilled;
+    const runDisabled = (isDanger && !confirmed);
 
     const inputHtml = inputs.length > 0 ? `
       <div class="step-inputs">
@@ -959,7 +923,7 @@ function updateProgressBar(moduleId, stepId, payload) {
 }
 
 // Append a single output line to the live log without re-rendering the whole UI.
-// Re-rendering on every SSE line was eating keystrokes in the rename-device input
+// Re-rendering on every SSE line was eating keystrokes in text inputs
 // and resetting scroll position. This appends directly to the existing DOM node;
 // state.outputLog still accumulates so a later full render reproduces the same view.
 function appendOutputLine(moduleId, stepId, line) {
@@ -1016,7 +980,7 @@ function renderConfigStep() {
           <label class="form-group-label">Deployment mode</label>
           <div class="radio-row">
             <label><input type="radio" name="deploymentMode" value="windows" ${dm==='windows'?'checked':''}> Windows app (native installer)</label>
-            <label><input type="radio" name="deploymentMode" value="chrome" ${dm==='chrome'?'checked':''}> Chrome (kiosk)</label>
+            <label><input type="radio" name="deploymentMode" value="chrome" ${dm==='chrome'?'checked':''}> Chrome (fullscreen)</label>
           </div>
         </div>
         <div class="form-group">
@@ -1054,15 +1018,8 @@ function renderStep(moduleDef, step, index) {
             const isDanger = step.risk === 'danger';
             const confirmed = state.confirmTicked[key] === true;
             const inputs = step.requiresInputs || [];
-            // Inputs are optional by default. Only rename-device requires its single value.
-            const requiredFieldsFilled = inputs.every(inp => {
-                if (step.id === 'rename-device' && inp.name === 'value') {
-                    const v = state.inputValues[key + '.' + inp.name] || '';
-                    return v.trim().length > 0;
-                }
-                return true;
-            });
-            const runDisabled = isRunning || (isDanger && !confirmed) || !requiredFieldsFilled;
+            // Every remaining input is optional (active-hours defaults to 3).
+            const runDisabled = isRunning || (isDanger && !confirmed);
 
             const linksHtml = step.links ? `
               <ul class="links-list">
@@ -1253,7 +1210,7 @@ function attachMigrateHandlers() {
         render();
     });
 
-    // Inputs (verify-autologon, rename-device) - same handler as module view.
+    // Step inputs - same handler as module view.
     document.querySelectorAll('[data-step-input]').forEach(el => {
         el.addEventListener('input', (e) => {
             state.inputValues[el.dataset.stepInput] = e.target.value;
