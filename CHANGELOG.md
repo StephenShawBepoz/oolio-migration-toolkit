@@ -10,6 +10,10 @@ All notable changes to the Oolio Migration Toolkit. Newest first.
 - `install-pos-app` now creates `installers/` if absent and, when no `.exe` is present, prints numbered instructions (where to get the build, where to put it, and that Chrome deployments can skip the step) instead of a bare "folder not found" error.
 - `build-release.ps1`: `-SkipInstallers` replaced by `-IncludeInstallers` (off by default). Any `.exe` in `installers/` is stripped from the staged copy unless the switch is given, so a developer's local installer can never leak into a public release asset. `-IncludeInstallers` with no `.exe` present is a build error, not a silent no-op.
 
+### Added
+- `bootstrap.ps1` gains a source selector. `$env:OOLIO_SOURCE='main'` pulls the current `main` branch archive instead of the latest release asset, so a terminal can be provisioned with unreleased code without waiting for a release to be cut. An env var is used rather than a parameter because `| iex` cannot pass arguments; `-Source main` works when the file is run directly. The `main` path strips everything `build-release.ps1` excludes, so both sources produce an identical layout on the terminal.
+- The wrapper-folder lift now detects the wrapping directory by looking for `Launch.ps1` inside it, handling both the release zip's `OolioMigration\` and a branch archive's `oolio-migration-toolkit-main\`.
+
 ### Note
 Removing the file from the working tree does not shrink existing clones — the 35.1 MB blob remains in git history and is still transferred on `git clone`. Purging it requires a history rewrite (`git filter-repo`) and a force-push, which invalidates every existing clone.
 

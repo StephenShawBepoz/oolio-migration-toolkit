@@ -6,11 +6,23 @@ A locally-hosted web toolkit that guides a technician through migrating a Window
 
 ### Option A — Remote (ScreenConnect / elevated PowerShell)
 
-Paste this one-liner into an elevated ScreenConnect command (or any admin PowerShell on the terminal). It pulls the latest release, extracts it to `C:\OolioMigration\`, and launches:
+Paste one of these into an **elevated** ScreenConnect command (or any admin PowerShell on the terminal). It downloads the toolkit to `C:\OolioMigration\` and launches it.
+
+**Stable — latest published release:**
 
 ```powershell
 iwr https://raw.githubusercontent.com/StephenShawBepoz/oolio-migration-toolkit/main/bootstrap.ps1 -UseBasicParsing | iex
 ```
+
+**Latest code — straight from `main`, no release needed:**
+
+```powershell
+$env:OOLIO_SOURCE='main'; iwr https://raw.githubusercontent.com/StephenShawBepoz/oolio-migration-toolkit/main/bootstrap.ps1 -UseBasicParsing | iex
+```
+
+Use the second when `main` is ahead of the last release. Both produce an identical layout on the terminal. The env var is used rather than a parameter because `| iex` cannot pass arguments.
+
+> The URL always points at `main` — that is the *branch ref* for `bootstrap.ps1` itself, so the bootstrapper is always current. Which **toolkit** you get is decided inside it: the release asset, or the `main` archive. Note `raw.githubusercontent.com` caches for ~5 minutes, so a just-pushed change to `bootstrap.ps1` can take that long to appear.
 
 ### Option B — Manual (USB stick or pre-staged copy)
 
@@ -21,6 +33,8 @@ iwr https://raw.githubusercontent.com/StephenShawBepoz/oolio-migration-toolkit/m
 5. The browser opens to `http://localhost:8080` with the technician UI (falls back to 8081–8084 if 8080 is taken).
 
 Works on Windows 10 and Windows 11. Chrome, WebView2, and TeamViewer are auto-installed at run-time if missing (needs internet at those steps). The rest of the toolkit runs fully offline once unpacked.
+
+**Windows-app deployments only:** the Oolio POS native installer (~35 MB) is not shipped with the toolkit. Copy `POS-*-installer.exe` into `C:\OolioMigration\installers\` before running that step. Chrome deployments need nothing extra.
 
 ## Screenshots
 

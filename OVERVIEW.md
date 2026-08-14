@@ -218,6 +218,14 @@ iwr https://raw.githubusercontent.com/StephenShawBepoz/oolio-migration-toolkit/m
 
 The bootstrapper downloads `OolioMigration.zip` from the latest GitHub release, extracts to `C:\OolioMigration\`, and launches `Launch.ps1` elevated.
 
+To pull the current `main` branch instead of the last release — useful when `main` is ahead of the last published release:
+
+```powershell
+$env:OOLIO_SOURCE='main'; iwr https://raw.githubusercontent.com/StephenShawBepoz/oolio-migration-toolkit/main/bootstrap.ps1 -UseBasicParsing | iex
+```
+
+Both sources produce an identical layout on the terminal: the `main` path strips everything `build-release.ps1` excludes (docs, screenshots, `tools/`, and `bootstrap.ps1` itself) so a stale bootstrapper never sits on disk.
+
 **Manual — USB stick:** Download the ZIP from the [Releases page](https://github.com/StephenShawBepoz/oolio-migration-toolkit/releases/latest), copy the `OolioMigration\` folder to the terminal, right-click `Launch.ps1` → Run as Administrator.
 
 ---
