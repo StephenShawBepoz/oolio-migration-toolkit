@@ -145,9 +145,8 @@ function Invoke-OolioInstallPOSApp {
     $installerDir = Join-Path $toolkitRoot "installers"
 
     if (-not (Test-Path $installerDir)) {
-        Write-Log "Installers folder not found at: $installerDir" "ERROR"
-        Write-Log "Place the Oolio POS installer (POS-*-installer.exe) in the toolkit 'installers' folder and retry." "WARN"
-        return
+        New-Item -ItemType Directory -Path $installerDir -Force | Out-Null
+        Write-Log "Created installers folder: $installerDir"
     }
 
     # Pick the newest POS installer (by write time). Falls back to any .exe.
@@ -156,7 +155,20 @@ function Invoke-OolioInstallPOSApp {
         $candidates = @(Get-ChildItem -Path $installerDir -Filter "*.exe" -File -ErrorAction SilentlyContinue)
     }
     if ($candidates.Count -eq 0) {
-        Write-Log "No installer .exe found in $installerDir." "ERROR"
+        # The installer is ~35 MB and is deliberately not shipped with the toolkit -
+        # only Windows-app deployments need it. This is a setup step for the
+        # technician, not a toolkit fault.
+        Write-Log "No Oolio POS installer found in: $installerDir" "ERROR"
+        Write-Log "" "WARN"
+        Write-Log "The POS installer is not bundled with the toolkit (it is ~35 MB and only" "WARN"
+        Write-Log "Windows-app deployments need it). To continue:" "WARN"
+        Write-Log "  1. Get the current POS build (POS-*-installer.exe) from the Oolio Platform" "WARN"
+        Write-Log "     team, or copy it from another terminal's C:\OolioMigration\installers\." "WARN"
+        Write-Log "  2. Copy it into: $installerDir" "WARN"
+        Write-Log "  3. Re-run this step." "WARN"
+        Write-Log "" "WARN"
+        Write-Log "If this venue is a Chrome deployment, this step does not apply - change the" "WARN"
+        Write-Log "deployment mode in the Deployment options step, or skip this step." "WARN"
         return
     }
 

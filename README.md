@@ -43,7 +43,7 @@ OolioMigration\
   ui\                   single-page web app
   scripts\              module + shared PowerShell logic
   assets\               wallpaper.jpg ships here
-  installers\           Oolio POS native installer (POS-*-installer.exe)
+  installers\           drop POS-*-installer.exe here (not shipped, not in git)
   tools\                standalone diagnostics (Internet-Check)
 ```
 

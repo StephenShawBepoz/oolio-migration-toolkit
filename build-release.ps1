@@ -13,11 +13,13 @@
     Runs on Windows PowerShell 5.1 and on PowerShell 7 (macOS / Linux).
     On a Mac you need pwsh:  brew install --cask powershell
 
-.PARAMETER SkipInstallers
-    Build without the bundled Oolio POS installer. Produces a ~120 KB zip instead
-    of ~35 MB, but Module 4's "Install Oolio POS (native Windows app)" step will
-    fail on the terminal unless the technician supplies the .exe by hand. Use for
-    Chrome-only deployments or for testing.
+.PARAMETER IncludeInstallers
+    Bundle any .exe sitting in installers/ into the zip. Off by default.
+
+    The Oolio POS native installer is ~35 MB and is not committed to git, so the
+    standard build ships a ~120 KB zip with an empty installers/ folder and its
+    README. Technicians running a Windows-app deployment drop the .exe in on the
+    terminal. Use this switch to build a self-contained zip for USB / offline use.
 
 .PARAMETER IncludeTools
     Also ship tools/ (Internet-Check). Off by default - Internet-Check is a
@@ -28,15 +30,15 @@
 
 .EXAMPLE
     ./build-release.ps1
-    Full release build, matching what v1.5.1 shipped.
+    Standard release build. ~120 KB.
 
 .EXAMPLE
-    ./build-release.ps1 -SkipInstallers
-    Lightweight build for testing the wizard without the 35 MB payload.
+    ./build-release.ps1 -IncludeInstallers
+    Self-contained build for USB / offline deployment. ~35 MB.
 #>
 [CmdletBinding()]
 param(
-    [switch]$SkipInstallers,
+    [switch]$IncludeInstallers,
     [switch]$IncludeTools,
     [string]$OutDir
 )
@@ -59,6 +61,11 @@ $zipPath  = Join-Path $OutDir 'OolioMigration.zip'
 #   *.md, screenshots/ - documentation. Not needed at run time.
 #   tools/         - Internet-Check is a standalone diagnostic (see -IncludeTools).
 #   progress.json  - per-terminal state, generated on first run.
+#   installers/*.exe - see -IncludeInstallers.
+#
+# installers/ itself always ships (folder + README) so the path exists on the
+# terminal for a technician to drop the POS installer into. scripts/oolio.ps1
+# reads $toolkitRoot\installers\POS-*installer.exe at run time.
 # ---------------------------------------------------------------------------
 $runtimeFiles = @(
     'Launch.ps1'
@@ -67,14 +74,10 @@ $runtimeDirs = @(
     'scripts',
     'server',
     'ui',
-    'assets'
+    'assets',
+    'installers'
 )
-
-# installers/ holds the native Oolio POS installer. scripts/oolio.ps1 reads
-# $toolkitRoot\installers\POS-*installer.exe at run time, so this is load-bearing
-# for Module 4's native-app step - not optional packaging.
-if (-not $SkipInstallers) { $runtimeDirs += 'installers' }
-if ($IncludeTools)        { $runtimeDirs += 'tools' }
+if ($IncludeTools) { $runtimeDirs += 'tools' }
 
 Write-Host ''
 Write-Host '===============================================' -ForegroundColor Cyan
@@ -115,13 +118,12 @@ if ($missing.Count -gt 0) {
     exit 1
 }
 
-# The native-app step needs an actual .exe, not just the folder.
-if (-not $SkipInstallers) {
+# Asking for installers you do not have is a build error, not a silent no-op.
+if ($IncludeInstallers) {
     $exes = @(Get-ChildItem -Path (Join-Path $repoRoot 'installers') -Filter '*.exe' -File -ErrorAction SilentlyContinue)
     if ($exes.Count -eq 0) {
-        Write-Host "ERROR: installers/ contains no .exe." -ForegroundColor Red
-        Write-Host "       Module 4's native Oolio POS install step would fail on the terminal." -ForegroundColor Red
-        Write-Host "       Add the installer, or build with -SkipInstallers if that is intended." -ForegroundColor Yellow
+        Write-Host "ERROR: -IncludeInstallers was specified but installers/ contains no .exe." -ForegroundColor Red
+        Write-Host "       Place the Oolio POS installer there, or drop the switch." -ForegroundColor Yellow
         exit 1
     }
 }
@@ -144,7 +146,17 @@ foreach ($d in $runtimeDirs) {
 Get-ChildItem -Path $stageDir -Recurse -File -Include 'progress.json', '*.log', '.DS_Store', 'Thumbs.db' -ErrorAction SilentlyContinue |
     Remove-Item -Force -ErrorAction SilentlyContinue
 
-# --- Size breakdown, so a 35 MB zip is never a surprise ---
+# Drop bundled installers unless explicitly asked for. Done after the copy so a
+# developer's local .exe never sneaks into a standard release build.
+if (-not $IncludeInstallers) {
+    $dropped = @(Get-ChildItem -Path (Join-Path $stageDir 'installers') -Filter '*.exe' -File -ErrorAction SilentlyContinue)
+    foreach ($e in $dropped) {
+        Remove-Item -Path $e.FullName -Force -ErrorAction SilentlyContinue
+        Write-Host ("  - installers/{0} (excluded; use -IncludeInstallers to bundle)" -f $e.Name) -ForegroundColor DarkGray
+    }
+}
+
+# --- Size breakdown, so a large zip is never a surprise ---
 Write-Host ''
 Write-Host 'Contents (uncompressed, largest first):'
 $entries = Get-ChildItem -Path $stageDir -Force | ForEach-Object {
@@ -180,10 +192,14 @@ Write-Host "Built: $zipPath" -ForegroundColor Green
 Write-Host ("Size:  {0} MB" -f $sizeMB) -ForegroundColor Green
 Write-Host "SHA256: $sha" -ForegroundColor DarkGray
 
-if ($SkipInstallers) {
+if ($IncludeInstallers) {
     Write-Host ''
-    Write-Host 'Built WITHOUT the native Oolio POS installer (-SkipInstallers).' -ForegroundColor Yellow
-    Write-Host "Module 4's native-app step will fail unless the technician supplies the .exe." -ForegroundColor Yellow
+    Write-Host 'Built WITH the native Oolio POS installer bundled (-IncludeInstallers).' -ForegroundColor Yellow
+    Write-Host 'Use this for USB / offline deployment, not for the public release asset.' -ForegroundColor Yellow
+} else {
+    Write-Host ''
+    Write-Host 'Windows-app deployments need the POS installer dropped into installers\ on' -ForegroundColor DarkGray
+    Write-Host 'the terminal. Chrome deployments need nothing further.' -ForegroundColor DarkGray
 }
 
 Write-Host ''

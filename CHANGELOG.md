@@ -2,6 +2,17 @@
 
 All notable changes to the Oolio Migration Toolkit. Newest first.
 
+## Unreleased
+
+### Changed
+- **The Oolio POS native installer is no longer committed to git or bundled in the release zip.** `installers/POS-prod-green-7.9.2-*.exe` was 35.1 MB — 99% of a 34.99 MB release asset — and only Windows-app deployments ever needed it. The release zip is now **~0.13 MB**. `installers/*.exe` is gitignored so it cannot be re-committed by accident.
+- `installers/` still ships as a folder with its README, so the drop path exists on the terminal. Technicians running a Windows-app deployment copy the current `POS-*-installer.exe` in before running that step; Chrome deployments need nothing.
+- `install-pos-app` now creates `installers/` if absent and, when no `.exe` is present, prints numbered instructions (where to get the build, where to put it, and that Chrome deployments can skip the step) instead of a bare "folder not found" error.
+- `build-release.ps1`: `-SkipInstallers` replaced by `-IncludeInstallers` (off by default). Any `.exe` in `installers/` is stripped from the staged copy unless the switch is given, so a developer's local installer can never leak into a public release asset. `-IncludeInstallers` with no `.exe` present is a build error, not a silent no-op.
+
+### Note
+Removing the file from the working tree does not shrink existing clones — the 35.1 MB blob remains in git history and is still transferred on `git clone`. Purging it requires a history rewrite (`git filter-repo`) and a force-push, which invalidates every existing clone.
+
 ## v1.5.1 — 2026-07-08
 
 ### Security

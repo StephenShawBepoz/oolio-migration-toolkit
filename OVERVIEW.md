@@ -84,7 +84,7 @@ Brings Windows itself in line with Oolio's POS conventions.
 
 1. **Deployment options** — Form: deployment mode (**Windows app** native installer — default — or Chrome kiosk) and whether a Customer Display (CDS) is present. Drives which subsequent steps appear.
 2. **Create Oolio folders** — `C:\Oolio\` plus `Assets`, `Certs`, `Logs` subfolders.
-3. **Install Oolio POS (native Windows app)** — _Windows-app mode._ Runs the bundled `installers\POS-*-installer.exe` silently (electron-builder NSIS, `/S`, per-machine), detects the installed exe, and drops an `Oolio POS.lnk` on the Public desktop. Replaces the Chrome kiosk.
+3. **Install Oolio POS (native Windows app)** — _Windows-app mode._ Runs `installers\POS-*-installer.exe` silently (electron-builder NSIS, `/S`, per-machine), detects the installed exe, and drops an `Oolio POS.lnk` on the Public desktop. Replaces the Chrome kiosk. The installer is **not** bundled with the toolkit (~35 MB, and only Windows-app deployments need it) and is not committed to git - the technician copies it into `installers\` on the terminal. Build a self-contained zip with `./build-release.ps1 -IncludeInstallers` for USB use.
 3b. **Create Oolio POS shortcut** — _Chrome mode._ Public-desktop `.lnk` launching `pos.oolio.io` in fullscreen kiosk mode.
 4. **Create Oolio CDS shortcut** — _Only if CDS=Yes._ Public-desktop shortcut launching `cds.oolio.io` on the second display (auto-detected display offset). Always a Chrome kiosk page, regardless of POS deployment mode.
 5. **Configure startup** — Copies the desktop shortcut(s) into `shell:startup` so the kiosk launches when the autologon user signs in. Tidies up legacy HKCU `Run` entries from older toolkit builds.

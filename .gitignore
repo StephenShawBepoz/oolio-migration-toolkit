@@ -5,3 +5,4 @@ certs/*.cer
 .DS_Store
 Thumbs.db
 dist/
+installers/*.exe
