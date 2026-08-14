@@ -125,8 +125,13 @@ function Invoke-WindowsCleanDesktop {
 
     # Matches a Bepoz shortcut either by its visible name or by where it points.
     # Path matching is what catches renamed shortcuts ("Till", "Back Office").
-    $namePattern   = 'bepoz|backoffice|back office|paz|tillpaz'
-    $targetPattern = '\\Bepoz\\|\\Bepoz$'
+    # The alternatives are word-bounded, and 'paz' is additionally anchored to the
+    # start of the name: an unanchored 'paz' also matched "Topaz Signature Pad",
+    # "Pazzo Pizza", "La Paz" - real venue shortcuts that must never be deleted.
+    # '^paz\b' still catches Bepoz's own "Paz.lnk" / "Paz - Shortcut.lnk";
+    # 'tillpaz' is distinctive enough to float anywhere (TillPaz.exe targets).
+    $namePattern   = '\b(bepoz|backoffice|back ?office|tillpaz)\b|^paz\b'
+    $targetPattern = '\\Bepoz(\\|$| )'
 
     $shell   = New-Object -ComObject WScript.Shell
     $removed = 0

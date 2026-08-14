@@ -232,6 +232,16 @@ if (-not (Test-Path $logsFolder)) {
 $sessionStamp   = Get-Date -Format "yyyy-MM-dd_HHmmss"
 $sessionLogPath = Join-Path $logsFolder "session-$sessionStamp.log"
 
+# Keep only the newest session logs. A POS terminal is never cleaned up by hand,
+# and a migration that gets retried over several days accumulates logs forever.
+# 20 sessions is far more history than any support ticket has ever needed.
+try {
+    Get-ChildItem -Path $logsFolder -Filter "session-*.log" -File -ErrorAction SilentlyContinue |
+        Sort-Object LastWriteTime -Descending |
+        Select-Object -Skip 19 |
+        Remove-Item -Force -ErrorAction SilentlyContinue
+} catch {}
+
 function Write-SessionLog {
     param([string]$Line)
     if (-not $sessionLogPath) { return }
@@ -373,6 +383,25 @@ function Invoke-StepStreaming {
         # autologon step (the only credential consumer) was removed - but the
         # $childEnv plumbing and the POST /input stash are left intact so a future
         # secret-bearing step cannot accidentally regress to query parameters.
+        #
+        # Client-supplied values are whitelist-validated, not merely quoted:
+        # Quote-PSLiteral escapes single quotes, but the whole child command is
+        # wrapped in DOUBLE quotes on the powershell.exe command line, so an
+        # embedded '"' in a value could still break out of the literal and run
+        # as elevated PowerShell. Every step that takes a value declares the
+        # exact shape it accepts; anything else is rejected before the command
+        # string is ever built.
+        $valueShapes = @{
+            "active-hours" = '^\d{1,2}$'   # an hour, 0-23; the step re-validates range
+        }
+        if ($valueShapes.ContainsKey($StepId) -and $value) {
+            if ($value -notmatch $valueShapes[$StepId]) {
+                Send-SSE -Response $Response -Data "__ERROR__: Invalid value for step '$StepId'."
+                Send-SSE -Response $Response -Data "__DONE__"
+                return
+            }
+        }
+
         $argSegment = ""
         $childEnv = @{}
         if ($StepId -eq "set-wallpaper") {
@@ -468,6 +497,18 @@ try {
         $response = $context.Response
         $path = $request.Url.AbsolutePath
         $method = $request.HttpMethod
+
+        # DNS-rebinding guard: a malicious page can point its own hostname at
+        # 127.0.0.1 and bypass the browser's same-origin protections, then read
+        # the CSRF token off GET / and drive the elevated /run endpoint. The
+        # Host header survives rebinding, so anything that is not literally
+        # localhost is rejected before any route logic runs.
+        $hostHdr = "$($request.Headers['Host'])"
+        $hostName = ($hostHdr -split ':')[0].ToLower()
+        if ($hostName -ne 'localhost' -and $hostName -ne '127.0.0.1' -and $hostName -ne '[::1]') {
+            try { Write-TextResponse -Response $response -Body "403 Forbidden (bad Host)" -Status 403 } catch {}
+            continue
+        }
 
         try {
             switch -Regex ("$method $path") {

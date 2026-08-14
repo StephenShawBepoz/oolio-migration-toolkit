@@ -4,6 +4,13 @@ All notable changes to the Oolio Migration Toolkit. Newest first.
 
 ## Unreleased
 
+### Fixed
+- **`clean-desktop` could delete non-Bepoz shortcuts.** The name pattern matched `paz` as an unanchored substring, which also matched "Topaz Signature Pad", "Pazzo Pizza", "La Paz" — real venue shortcuts. All alternatives are now word-bounded and `paz` is anchored to the start of the name; the target pattern no longer matches paths like `C:\BepozArchive\`. `tests/patterns.tests.ps1` extracts the live patterns from `windows.ps1` and asserts an explicit must-delete / must-keep contract, and runs in CI before every release.
+
+### Security
+- **`/run` values are whitelist-validated, not merely quoted.** `Quote-PSLiteral` escapes single quotes, but the child command is wrapped in double quotes on the `powershell.exe` command line, so an embedded `"` in a step value could break out of the literal and execute as elevated PowerShell. Each step now declares the exact shape its value accepts (`active-hours`: `^\d{1,2}$`); anything else is rejected before the command string is built.
+- **Host-header check on every request** blocks DNS rebinding — the one route by which a web page could bypass same-origin protections, read the CSRF token off `GET /`, and drive the elevated `/run` endpoint. Anything that is not literally `localhost` / `127.0.0.1` / `[::1]` gets a 403 before any route logic runs.
+
 ### Removed
 - **`check-join`** (detect domain / Azure AD join state), **`locale-time`** (locale + NTP), **`verify-autologon`**, **`rename-device`**, **`check-chrome`** (Chrome install), and **`printer-utilities`** (links-only) steps, with their functions, router entries, progress defaults, and UI definitions.
 - Autologon is no longer configured by the toolkit — it is expected on the device image. The `set-startup` step still reports its state read-only, so a terminal that would stop at the login screen is caught before go-live. The credential plumbing (`POST /input` stash, per-child env vars, CSRF) is deliberately left intact with an empty `SECRET_STEPS` map so any future secret-bearing step cannot regress to query parameters.
@@ -11,27 +18,30 @@ All notable changes to the Oolio Migration Toolkit. Newest first.
 - `printer-utilities` is superseded by the new EpsonNet Config step.
 
 ### Added
+- **Automated releases.** Pushing a `v*` tag now builds `OolioMigration.zip` and publishes the GitHub release (`.github/workflows/release.yml`). The workflow refuses to ship if the tag does not match `TOOLKIT_VERSION` in `ui/app.js`, and runs the pattern safety tests first. This closes the recurring gap where `main` ran ahead of the last published release for weeks.
+- `tests/patterns.tests.ps1` — see Fixed above.
+
 - **`default-browser`** — enforces Microsoft Edge for `http`, `https`, `.htm`, `.html`, `.pdf` via the `DefaultAssociationsConfiguration` policy, which applies to every user at sign-in. Redirects Internet Explorer launches into Edge and disables the IE11 optional feature. The per-user `UserChoice` key is hash-protected and cannot be written directly, so policy is the only supported route; it takes effect at the next sign-in.
 - **`usb-power`** — disables USB selective suspend in the active power plan and clears "allow the computer to turn off this device to save power" on every present USB and COM device via `MSPower_DeviceEnable`. The usual cause of printers, cash drawers, and scanners dropping off mid-shift. Complements `power-plan`, which covers standby/monitor/disk/hibernate but not USB.
 - **`check-epsonnet-config`** — downloads ENCU from `ftp.epson.com`, verifies the Epson Authenticode signature, then launches the wizard for manual click-through while polling for completion. The installer is a WinZip SFX around InstallShield: neither layer honours `/S` or `/SILENT`, and InstallShield ignores synthetic `BM_CLICK` messages, so automation was tried and abandoned.
 - Favicon icons on the POS / CDS / KDS shortcuts, fetched from each site into `C:\Oolio\Assets\`, with a graceful fall back to the Chrome default icon.
 
+- `bootstrap.ps1` gains a source selector. `$env:OOLIO_SOURCE='main'` pulls the current `main` branch archive instead of the latest release asset, so a terminal can be provisioned with unreleased code without waiting for a release to be cut. An env var is used rather than a parameter because `| iex` cannot pass arguments; `-Source main` works when the file is run directly. The `main` path strips everything `build-release.ps1` excludes, so both sources produce an identical layout on the terminal.
+- The wrapper-folder lift now detects the wrapping directory by looking for `Launch.ps1` inside it, handling both the release zip's `OolioMigration\` and a branch archive's `oolio-migration-toolkit-main\`.
+
 ### Changed
+- Session logs in `C:\Oolio\Logs` are rotated at server start; the newest 20 are kept.
+- `bootstrap.ps1` enables TLS 1.3 where available (falls back to 1.2), matching `shared.ps1`.
+
 - **`enable-firewall`** also sets every active network to the Private profile (domain-authenticated networks are left alone — Windows owns that classification) and enables File and Printer Sharing plus Network Discovery **scoped to Private only**, so nothing is opened up on a Public network. Starts the Function Discovery services so shared printers are actually reachable.
 - **`clean-desktop`** no longer wipes both desktops. It now removes only Bepoz shortcuts, across both desktops, the Start menu (recursive, including empty Bepoz folders), and taskbar pins — matching on shortcut name *and* on target path so renamed shortcuts are still caught. Explorer is restarted only if a pin was removed. Now runs for `T` and `KDS` as well as `ST`.
 - POS and CDS shortcuts moved from `--kiosk` to `--app=<url> --start-fullscreen`, matching KDS. Kiosk mode leaves no way out on a touchscreen terminal with no physical keyboard; app mode is equally chrome-free but exits with the Windows key or Alt+F4. All three also pass `--disable-pinch`.
 - TeamViewer install polls up to 3 minutes for `TeamViewer.exe` instead of checking once immediately after the installer exits. The `/S` installer hands off to a background service installer and exits early, which was reporting false failures on successful installs.
 
-
-### Changed
 - **The Oolio POS native installer is no longer committed to git or bundled in the release zip.** `installers/POS-prod-green-7.9.2-*.exe` was 35.1 MB — 99% of a 34.99 MB release asset — and only Windows-app deployments ever needed it. The release zip is now **~0.13 MB**. `installers/*.exe` is gitignored so it cannot be re-committed by accident.
 - `installers/` still ships as a folder with its README, so the drop path exists on the terminal. Technicians running a Windows-app deployment copy the current `POS-*-installer.exe` in before running that step; Chrome deployments need nothing.
 - `install-pos-app` now creates `installers/` if absent and, when no `.exe` is present, prints numbered instructions (where to get the build, where to put it, and that Chrome deployments can skip the step) instead of a bare "folder not found" error.
 - `build-release.ps1`: `-SkipInstallers` replaced by `-IncludeInstallers` (off by default). Any `.exe` in `installers/` is stripped from the staged copy unless the switch is given, so a developer's local installer can never leak into a public release asset. `-IncludeInstallers` with no `.exe` present is a build error, not a silent no-op.
-
-### Added
-- `bootstrap.ps1` gains a source selector. `$env:OOLIO_SOURCE='main'` pulls the current `main` branch archive instead of the latest release asset, so a terminal can be provisioned with unreleased code without waiting for a release to be cut. An env var is used rather than a parameter because `| iex` cannot pass arguments; `-Source main` works when the file is run directly. The `main` path strips everything `build-release.ps1` excludes, so both sources produce an identical layout on the terminal.
-- The wrapper-folder lift now detects the wrapping directory by looking for `Launch.ps1` inside it, handling both the release zip's `OolioMigration\` and a branch archive's `oolio-migration-toolkit-main\`.
 
 ### Note
 Removing the file from the working tree does not shrink existing clones — the 35.1 MB blob remains in git history and is still transferred on `git clone`. Purging it requires a history rewrite (`git filter-repo`) and a force-push, which invalidates every existing clone.

@@ -65,8 +65,13 @@ if ($Source -eq 'main') {
     Write-Host ""
 }
 
-# Force TLS 1.2 for older Windows builds
-[Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
+# Force modern TLS for older Windows builds. Prefer 1.2+1.3 where the enum knows
+# about 1.3 (newer .NET); fall back to 1.2 alone - same pattern as shared.ps1.
+try {
+    [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12 -bor [Net.SecurityProtocolType]::Tls13
+} catch {
+    [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
+}
 
 if (Test-Path $installRoot) {
     Write-Host "Existing $installRoot found. Removing before fresh install..." -ForegroundColor Yellow
