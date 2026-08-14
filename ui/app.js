@@ -2,7 +2,7 @@
 
 // Bump alongside CHANGELOG.md on every release. Shown in the app header so a
 // technician (or a support ticket screenshot) instantly identifies the build.
-const TOOLKIT_VERSION = 'v1.5.1';
+const TOOLKIT_VERSION = 'v1.6';
 
 // ---------- Module + step definitions ----------
 

@@ -2,7 +2,7 @@
 
 All notable changes to the Oolio Migration Toolkit. Newest first.
 
-## Unreleased
+## v1.6 — 2026-08-14
 
 ### Fixed
 - **`consolidate-backups` no longer trusts a stale backup.** The deletion guard only checked that *some* `Bepoz_Data_*.zip` existed — a weeks-old zip from a previously aborted migration authorised recursive deletion of `C:\Bepoz` containing every trade since. The guard is now freshness-based: if the terminal holds data files, the newest backup zip must be **newer than the newest data file**, or the step aborts and tells the technician to re-run `zip-data`. Terminals with no local data (plain Till / KDS, which never run `zip-data`) no longer require a zip at all — previously the step could never succeed on those types.
