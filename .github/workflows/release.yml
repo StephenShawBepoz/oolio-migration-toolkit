@@ -2,9 +2,11 @@
 #
 # Two ways to release:
 #   1. Push a v* tag:        git tag v1.6 && git push origin v1.6
-#   2. Run this workflow from the Actions tab (workflow_dispatch) with the tag
-#      as input - the workflow creates the tag at the commit it builds. This
-#      exists for environments whose git remotes cannot push tag refs.
+#   2. Push a release/v* branch (e.g. release/v1.6) - the workflow derives the
+#      tag from the branch name, creates the tag ref itself at the commit it
+#      builds, then deletes the branch. This exists for environments whose git
+#      remotes accept branch pushes but cannot push tag refs.
+#   3. Run it from the Actions tab (workflow_dispatch) with the tag as input.
 #
 # Either way, the workflow refuses to ship if TOOLKIT_VERSION in ui/app.js does
 # not match the tag, so the version badge technicians see can never drift from
@@ -17,6 +19,8 @@ on:
   push:
     tags:
       - 'v*'
+    branches:
+      - 'release/v*'
   workflow_dispatch:
     inputs:
       tag:
@@ -37,7 +41,9 @@ jobs:
         id: tag
         shell: pwsh
         run: |
-          $tag = if ('${{ github.event_name }}' -eq 'workflow_dispatch') { '${{ inputs.tag }}' } else { '${{ github.ref_name }}' }
+          $tag = if ('${{ github.event_name }}' -eq 'workflow_dispatch') { '${{ inputs.tag }}' }
+                 elseif ('${{ github.ref_name }}' -like 'release/*') { '${{ github.ref_name }}'.Substring('release/'.Length) }
+                 else { '${{ github.ref_name }}' }
           if ($tag -notmatch '^v\d') {
             Write-Host "::error::'$tag' does not look like a release tag (expected v<major>...)."
             exit 1
@@ -69,8 +75,8 @@ jobs:
         shell: pwsh
         run: ./build-release.ps1
 
-      - name: Create tag (dispatch only)
-        if: github.event_name == 'workflow_dispatch'
+      - name: Create tag (when not triggered by a tag push)
+        if: github.event_name == 'workflow_dispatch' || startsWith(github.ref, 'refs/heads/release/')
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
@@ -97,3 +103,11 @@ jobs:
             --title '${{ steps.tag.outputs.tag }}' \
             --notes 'See CHANGELOG.md for details. Install with the bootstrap one-liner in README.md.' \
             --verify-tag
+
+      - name: Delete the release/* trigger branch
+        if: startsWith(github.ref, 'refs/heads/release/')
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh api -X DELETE "repos/${{ github.repository }}/git/refs/heads/${{ github.ref_name }}" \
+            || echo "Branch cleanup failed - delete the release branch manually (harmless)."
