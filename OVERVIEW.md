@@ -30,7 +30,7 @@ The toolkit replaces the human checklist with a guided, opinionated run that:
 - Streams live PowerShell output to the browser so the technician sees what's happening
 - Treats every danger step as an explicit, ticked confirmation
 - Persists progress so a 45-minute migration can survive a coffee break, a venue closure, or a remote-session disconnect
-- Ships as a single zip (~35 MB, dominated by the bundled Oolio POS installer; the toolkit itself is ~120 KB) with no install footprint, deployable via ScreenConnect or USB
+- Ships as a single ~0.14 MB zip with no install footprint, deployable via ScreenConnect or USB (the Oolio POS native installer, ~35 MB, is supplied separately and only for Windows-app deployments)
 
 ---
 
@@ -212,7 +212,7 @@ See `screenshots/` for the captured states:
 - **EventSource (SSE)** — one-way browser ← server streaming for live PowerShell output
 - **GitHub Releases** — versioned distribution; `bootstrap.ps1` pulls `OolioMigration.zip` from the latest release
 
-The toolkit code is ~120 KB compressed; the release zip is ~35 MB because it bundles the Oolio POS native installer. No internet required at runtime except for the Chrome / WebView2 / TeamViewer auto-installs in Module 3.
+The release zip is ~0.14 MB - the Oolio POS native installer is not bundled (it is supplied per-terminal for Windows-app deployments only). No internet required at runtime except for the WebView2 / TeamViewer / EpsonNet Config installs in Module 3.
 
 ---
 

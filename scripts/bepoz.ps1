@@ -326,6 +326,21 @@ function Invoke-BepozDeleteRegistry {
         return
     }
 
+    # Export before deleting, like check-run-key does. These values
+    # (SQL_Server, DataPath, BackupPath) are re-read by zip-data, stop-sql, and
+    # consolidate-backups on a retry, and a rollback to Bepoz needs them - a
+    # session-log line is not a restore path.
+    $backupDir = "C:\OolioBackup"
+    if (-not (Test-Path $backupDir)) { New-Item -ItemType Directory -Path $backupDir -Force | Out-Null }
+    $regExport = Join-Path $backupDir ("HKCU_Backoffice_" + (Get-Date -Format "yyyyMMdd_HHmmss") + ".reg")
+    Write-Log "Exporting $keyPath to $regExport before deletion..."
+    $null = reg.exe export "HKCU\Software\Backoffice" "$regExport" /y 2>&1
+    if ($LASTEXITCODE -ne 0 -or -not (Test-Path $regExport)) {
+        Write-Log "Registry export failed (reg.exe exit $LASTEXITCODE). Aborting before deletion so the values are not lost." "ERROR"
+        return
+    }
+    Write-Log "Exported. Restore later with: reg import `"$regExport`"" "OK"
+
     Write-Log "Deleting: $keyPath and all subkeys..."
     Remove-Item -Path $keyPath -Recurse -Force -ErrorAction Stop
     Write-Log "Registry key deleted successfully." "OK"

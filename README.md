@@ -32,7 +32,7 @@ Use the second when `main` is ahead of the last release. Both produce an identic
 4. Right-click `Launch.ps1` and choose **Run as Administrator**.
 5. The browser opens to `http://localhost:8080` with the technician UI (falls back to 8081–8084 if 8080 is taken).
 
-Works on Windows 10 and Windows 11. Chrome, WebView2, and TeamViewer are auto-installed at run-time if missing (needs internet at those steps). The rest of the toolkit runs fully offline once unpacked.
+Works on Windows 10 and Windows 11. Google Chrome is expected to be on the device image already; WebView2, TeamViewer, and EpsonNet Config are installed at run-time if missing (needs internet at those steps). The rest of the toolkit runs fully offline once unpacked.
 
 **Windows-app deployments only:** the Oolio POS native installer (~35 MB) is not shipped with the toolkit. Copy `POS-*-installer.exe` into `C:\OolioMigration\installers\` before running that step. Chrome deployments need nothing extra.
 
@@ -51,14 +51,12 @@ Works on Windows 10 and Windows 11. Chrome, WebView2, and TeamViewer are auto-in
 ```
 OolioMigration\
   Launch.ps1            entry point
-  bootstrap.ps1         remote one-liner bootstrapper (ScreenConnect)
   progress.json         auto-created, persists state
   server\               HTTP listener + router
   ui\                   single-page web app
   scripts\              module + shared PowerShell logic
   assets\               wallpaper.jpg ships here
   installers\           drop POS-*-installer.exe here (not shipped, not in git)
-  tools\                standalone diagnostics (Internet-Check)
 ```
 
 ## Releasing
@@ -78,6 +76,6 @@ The `release` GitHub Actions workflow verifies the tag matches `TOOLKIT_VERSION`
 
 ## Development
 
-`tests/patterns.tests.ps1` guards the Bepoz shortcut-matching patterns in `clean-desktop` — the step deletes files on venue terminals, so the must-keep list in that file is the contract. Run it after touching `$namePattern` / `$targetPattern` in `scripts/windows.ps1`. The server also AST-parses every module script at boot and cross-checks the UI against the router; `GET /health` reports the result.
+`tests/patterns.tests.ps1` guards the Bepoz shortcut-matching patterns in `clean-desktop` — the step deletes files on venue terminals, so the must-keep list in that file is the contract. Run it after touching `$strongPattern` / `$targetPattern` in `scripts/windows.ps1`. The server also AST-parses every module script at boot and cross-checks the UI against the router; `GET /health` reports the result.
 
 See `OVERVIEW.md` for how the toolkit works and `CHANGELOG.md` for release history. (`claude.md` is the original v1 design spec, kept for reference.)

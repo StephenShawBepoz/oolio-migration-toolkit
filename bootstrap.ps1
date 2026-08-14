@@ -73,50 +73,111 @@ try {
     [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
 }
 
-if (Test-Path $installRoot) {
-    Write-Host "Existing $installRoot found. Removing before fresh install..." -ForegroundColor Yellow
-    Remove-Item -Path $installRoot -Recurse -Force
+# Refuse to reinstall over a running toolkit. Otherwise the old in-memory
+# server keeps serving (stale server/router logic on the original port) while
+# the new one falls back to the next port - two instances, mismatched code.
+foreach ($probePort in 8080, 8081, 8082, 8083, 8084) {
+    try {
+        $ping = Invoke-WebRequest -Uri "http://localhost:$probePort/ping" -UseBasicParsing -TimeoutSec 1 -ErrorAction Stop
+        if ($ping.StatusCode -eq 200) {
+            Write-Host "ERROR: a toolkit instance is already running on port $probePort." -ForegroundColor Red
+            Write-Host "       Close the Oolio Migration Toolkit window on this terminal, then re-run." -ForegroundColor Yellow
+            exit 1
+        }
+    } catch {}
 }
 
+# Download and stage into TEMP FIRST. Only once the new tree is validated do we
+# touch the existing install - so a failed download or a truncated zip can never
+# leave the terminal with no toolkit at all (the old delete-then-download order
+# did exactly that).
 Write-Host "Downloading..."
-Invoke-WebRequest -Uri $zipUrl -OutFile $tempZip -UseBasicParsing
+$stageRoot = Join-Path $env:TEMP ("OolioStage_" + [System.IO.Path]::GetRandomFileName())
+try {
+    Invoke-WebRequest -Uri $zipUrl -OutFile $tempZip -UseBasicParsing
+} catch {
+    Write-Host "ERROR: download failed - $($_.Exception.Message)" -ForegroundColor Red
+    Write-Host "       The existing install (if any) is untouched. Check connectivity and re-run." -ForegroundColor Yellow
+    exit 1
+}
 
-Write-Host "Extracting to $installRoot..."
-Expand-Archive -Path $tempZip -DestinationPath $installRoot -Force
+Write-Host "Staging..."
+New-Item -ItemType Directory -Path $stageRoot -Force | Out-Null
+Expand-Archive -Path $tempZip -DestinationPath $stageRoot -Force
 Remove-Item -Path $tempZip -Force -ErrorAction SilentlyContinue
 
-# Both shapes wrap their contents in a single folder - the release zip may use
-# OolioMigration\, and a GitHub branch archive always uses <repo>-<branch>\.
-# Lift whichever is present so Launch.ps1 ends up at the install root.
-$wrapper = @(Get-ChildItem -Path $installRoot -Directory -Force |
+# Lift the wrapping folder (release zip uses OolioMigration\; a branch archive
+# uses <repo>-<branch>\) so Launch.ps1 sits at the stage root.
+$wrapper = @(Get-ChildItem -Path $stageRoot -Directory -Force |
     Where-Object { Test-Path (Join-Path $_.FullName 'Launch.ps1') }) | Select-Object -First 1
 if ($wrapper) {
-    Get-ChildItem -Path $wrapper.FullName -Force | Move-Item -Destination $installRoot -Force
+    Get-ChildItem -Path $wrapper.FullName -Force | Move-Item -Destination $stageRoot -Force
     Remove-Item -Path $wrapper.FullName -Recurse -Force
 }
 
 # A branch archive carries the whole repo. Strip everything build-release.ps1
 # leaves out, so a main install and a release install produce an identical layout
-# on the terminal - otherwise "works from the release, breaks from main" bugs creep
-# in. bootstrap.ps1 in particular must go, so nobody later runs a stale copy from
-# disk instead of the current one from GitHub. tools/ (Internet-Check) is excluded
-# from both; it has its own bootstrapper.
+# on the terminal. bootstrap.ps1 in particular must go, so nobody later runs a
+# stale copy from disk instead of the current one from GitHub.
 if ($Source -eq 'main') {
     foreach ($junk in @('bootstrap.ps1', 'build-release.ps1', 'screenshots', 'tools', '.github', '.gitignore',
                         'README.md', 'OVERVIEW.md', 'CHANGELOG.md', 'claude.md')) {
-        $p = Join-Path $installRoot $junk
+        $p = Join-Path $stageRoot $junk
         if (Test-Path $p) { Remove-Item -Path $p -Recurse -Force -ErrorAction SilentlyContinue }
     }
 }
 
-$launch = Join-Path $installRoot 'Launch.ps1'
-if (-not (Test-Path $launch)) {
-    Write-Host "ERROR: Launch.ps1 not found after extraction." -ForegroundColor Red
-    Write-Host "       If you used the release source, the latest release may predate" -ForegroundColor Yellow
-    Write-Host "       the current packaging. Retry with:" -ForegroundColor Yellow
-    Write-Host "         `$env:OOLIO_SOURCE='main'" -ForegroundColor Yellow
+# Validate the staged tree BEFORE destroying the existing install.
+if (-not (Test-Path (Join-Path $stageRoot 'Launch.ps1'))) {
+    Write-Host "ERROR: Launch.ps1 not found in the downloaded package - not installing." -ForegroundColor Red
+    Write-Host "       The existing install (if any) is untouched. If you used the release" -ForegroundColor Yellow
+    Write-Host "       source, retry with:  `$env:OOLIO_SOURCE='main'" -ForegroundColor Yellow
+    Remove-Item -Path $stageRoot -Recurse -Force -ErrorAction SilentlyContinue
     exit 1
 }
+
+# Swap into place. Preserve per-terminal state (progress.json) and any locally
+# supplied installer across the reinstall - both are gitignored and absent from
+# the package, so re-extraction cannot restore them, and losing progress.json
+# would reset every step status and re-arm destructive steps already run.
+# OOLIO_FRESH=1 forces a clean install that discards saved progress.
+$preserve = @{}
+if ($env:OOLIO_FRESH -ne '1' -and (Test-Path $installRoot)) {
+    $progressSrc = Join-Path $installRoot 'progress.json'
+    if (Test-Path $progressSrc) {
+        $preserve['progress.json'] = Get-Content -Path $progressSrc -Raw -Encoding UTF8
+        Write-Host "Preserving existing migration progress (set OOLIO_FRESH=1 to discard)." -ForegroundColor Cyan
+    }
+    $installerSrc = Join-Path $installRoot 'installers'
+    if (Test-Path $installerSrc) {
+        $exes = @(Get-ChildItem -Path $installerSrc -Filter '*.exe' -File -ErrorAction SilentlyContinue)
+        foreach ($e in $exes) { $preserve["installers\$($e.Name)"] = $e.FullName }
+    }
+}
+
+if (Test-Path $installRoot) {
+    Write-Host "Replacing existing $installRoot..." -ForegroundColor Yellow
+    Remove-Item -Path $installRoot -Recurse -Force
+}
+$installParent = Split-Path $installRoot -Parent
+if ($installParent -and -not (Test-Path $installParent)) {
+    New-Item -ItemType Directory -Path $installParent -Force | Out-Null
+}
+Move-Item -Path $stageRoot -Destination $installRoot -Force
+
+# Restore preserved files.
+foreach ($rel in $preserve.Keys) {
+    $dest = Join-Path $installRoot $rel
+    $destDir = Split-Path $dest -Parent
+    if (-not (Test-Path $destDir)) { New-Item -ItemType Directory -Path $destDir -Force | Out-Null }
+    if ($rel -eq 'progress.json') {
+        Set-Content -Path $dest -Value $preserve[$rel] -Encoding UTF8
+    } else {
+        Copy-Item -Path $preserve[$rel] -Destination $dest -Force -ErrorAction SilentlyContinue
+    }
+}
+
+$launch = Join-Path $installRoot 'Launch.ps1'
 
 Write-Host ""
 Write-Host "Bootstrap complete. Launching toolkit..." -ForegroundColor Green

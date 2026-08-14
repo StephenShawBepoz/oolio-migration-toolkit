@@ -2,6 +2,26 @@
 
 All notable changes to the Oolio Migration Toolkit. Newest first.
 
+## v1.6.1 — 2026-08-14
+
+Second-pass fixes from the completed 70-agent review (the first pass shipped in v1.6; these are the findings that survived verification against v1.6 itself).
+
+### Fixed
+- **The kiosk shortcuts were being placed in the wrong user's Startup folder.** `set-startup` copied them into the *elevated* account's `%APPDATA%\...\Startup`. Whenever the interactive autologon POS user is a standard user (the normal case), the toolkit runs elevated under a *different* admin account, so the POS user never saw the shortcuts and Oolio silently never launched on boot. They now go to the **all-users** Startup folder, which fires for whichever account signs in. `set-startup` also now performs the read-only autologon check the docs already promised (the port had dropped it) — warning if the terminal would stop at the login screen.
+- **A failed step in the guided migrate flow no longer looks like it passed.** For form / confirm / optional pause steps, `continueMigrateStep` ignored the run result and advanced, so a failed danger step (e.g. `consolidate-backups`) silently re-presented its pause card with no error shown. It now raises the error card (Retry / Skip / Stop) on failure.
+- **Skipping "Deployment options" no longer hides both POS install steps.** With `deploymentMode` unset, neither `install-pos-app` nor `install-pos-chrome` was visible, so `set-startup` had nothing to copy. An unset mode now defaults to the native Windows app, matching the config form's own default.
+- **`delete-registry` exports the Backoffice key before deleting it** (to `C:\OolioBackup\HKCU_Backoffice_<timestamp>.reg`), mirroring `check-run-key`. Those values (SQL_Server, DataPath, BackupPath) are re-read on retry and needed for any rollback; a session-log line was not a restore path.
+- **A stale CSRF token after a server restart is now surfaced.** `saveProgress` swallowed the resulting 403 while the UI kept flipping steps on screen and nothing persisted; it now tells the technician to reload.
+- `final-restart` no longer lists the removed device-rename and autologon steps among what the restart applies.
+
+### Changed — bootstrap reliability
+- **Download-and-stage before destroying the existing install.** The old order deleted `C:\OolioMigration` *before* downloading, so any download failure left the terminal with no toolkit at all. It now stages into TEMP, validates `Launch.ps1` is present, and only then swaps into place.
+- **Re-running the bootstrapper preserves `progress.json`** (and any locally supplied POS installer) instead of wiping migration state and re-arming destructive steps already run. `OOLIO_FRESH=1` forces a clean install.
+- **Refuses to reinstall over a running instance** (probes `/ping` on 8080–8084) so you can't end up with a stale in-memory server on one port and new code on another.
+
+### Docs
+- README, OVERVIEW, and the deployment-config note corrected: Chrome is no longer auto-installed, the release zip is ~0.14 MB (not ~35 MB), and the installed-layout diagram no longer lists `bootstrap.ps1` or `tools\`.
+
 ## v1.6 — 2026-08-14
 
 ### Fixed

@@ -2,7 +2,7 @@
 
 // Bump alongside CHANGELOG.md on every release. Shown in the app header so a
 // technician (or a support ticket screenshot) instantly identifies the build.
-const TOOLKIT_VERSION = 'v1.6';
+const TOOLKIT_VERSION = 'v1.6.1';
 
 // ---------- Module + step definitions ----------
 
@@ -93,9 +93,9 @@ const MODULES = [
         description: 'Set deployment options, create folders and shortcuts, schedule the final restart.',
         showInTypes: ['ST', 'KDS'],
         steps: [
-            { id: 'deployment-config',  title: 'Deployment options',         risk: 'safe', configStep: true, showInTypes: ['ST'], note: 'Choose deployment mode - the native Windows app (installer bundled in the toolkit) or the Chrome fullscreen shortcut - and whether a CDS is present.' },
+            { id: 'deployment-config',  title: 'Deployment options',         risk: 'safe', configStep: true, showInTypes: ['ST'], note: 'Choose deployment mode - the native Windows app (installer copied into the toolkit installers\\ folder on the terminal; not bundled) or the Chrome fullscreen shortcut - and whether a CDS is present.' },
             { id: 'create-folders',     title: 'Create Oolio folders',       risk: 'safe', showInTypes: ['ST','KDS'], note: 'Creates C:\\Oolio and Assets/Certs/Logs subfolders.' },
-            { id: 'install-pos-app',    title: 'Install Oolio POS (native Windows app)', risk: 'safe', showInTypes: ['ST'], note: 'Runs installers\\POS-*-installer.exe silently (electron-builder NSIS, /S, per-machine to Program Files), detects the installed executable, and drops an "Oolio POS" shortcut on the Public desktop for the startup step to pick up. This native app replaces the Chrome fullscreen shortcut. The installer is NOT bundled with the toolkit (~35 MB) - copy POS-*-installer.exe into the toolkit installers\\ folder on this terminal before running this step.', showWhen: m => m.deploymentMode === 'windows' },
+            { id: 'install-pos-app',    title: 'Install Oolio POS (native Windows app)', risk: 'safe', showInTypes: ['ST'], note: 'Runs installers\\POS-*-installer.exe silently (electron-builder NSIS, /S, per-machine to Program Files), detects the installed executable, and drops an "Oolio POS" shortcut on the Public desktop for the startup step to pick up. This native app replaces the Chrome fullscreen shortcut. The installer is NOT bundled with the toolkit (~35 MB) - copy POS-*-installer.exe into the toolkit installers\\ folder on this terminal before running this step.', showWhen: m => (m.deploymentMode || 'windows') === 'windows' },
             { id: 'install-pos-chrome', title: 'Create Oolio POS shortcut (Chrome fullscreen)', risk: 'safe', showInTypes: ['ST'], note: 'Public-desktop shortcut launching pos.oolio.io in Chrome app mode - fullscreen, no browser UI, pinch-zoom disabled, with the site favicon as its icon. Exits with the Windows key or Alt+F4, unlike kiosk mode.', showWhen: m => m.deploymentMode === 'chrome' },
             { id: 'install-cds-chrome', title: 'Create Oolio CDS shortcut (Chrome fullscreen)', risk: 'safe', showInTypes: ['ST'], note: 'Public-desktop shortcut launching cds.oolio.io in Chrome app mode on the second display, with the site favicon as its icon.', showWhen: m => m.hasCDS === true },
             { id: 'install-kds-chrome', title: 'Create Oolio KDS shortcut (Chrome fullscreen)', risk: 'safe', showInTypes: ['KDS'], note: 'Public-desktop shortcut "Oolio KDS" launching kds.oolio.io as a fullscreen Chrome app window (--app + --start-fullscreen).' },
@@ -224,7 +224,7 @@ async function saveProgress() {
     state.progress.meta = state.progress.meta || {};
     state.progress.meta.lastUpdated = new Date().toISOString();
     try {
-        await fetch('/progress', {
+        const resp = await fetch('/progress', {
             method: 'POST',
             headers: {
                 'Content-Type': 'application/json',
@@ -232,6 +232,17 @@ async function saveProgress() {
             },
             body: JSON.stringify(state.progress)
         });
+        // A 403 here almost always means the server was restarted (e.g. the
+        // Launch.ps1 window was closed and reopened) and this tab is holding a
+        // stale CSRF token. The UI would otherwise keep flipping steps on screen
+        // while nothing persists - warn loudly, once, so the technician reloads.
+        if (!resp.ok && !state.staleTokenWarned) {
+            state.staleTokenWarned = true;
+            console.error('Progress save rejected:', resp.status);
+            if (resp.status === 403) {
+                alert('The toolkit server was restarted, so this page can no longer save progress. Reload the page (F5) to reconnect - your completed steps are already saved on disk.');
+            }
+        }
     } catch (e) {
         console.error('Failed to save progress', e);
     }
@@ -421,8 +432,18 @@ async function continueMigrateStep() {
         return;
     }
 
-    // pause-form / pause-confirm / pause-optional: run the step, then resolve
-    await runStep(next.moduleId, next.stepId, getStepExtras(next.stepId));
+    // pause-form / pause-confirm / pause-optional: run the step, then resolve.
+    // If the step FAILS, surface the error card (Retry / Skip / Stop) instead of
+    // resolving - otherwise the loop just re-evaluates, finds the step still not
+    // complete, and silently re-presents the identical pause card with no sign
+    // anything went wrong. A failed danger step (e.g. consolidate-backups) must
+    // never look like it succeeded.
+    const ok = await runStep(next.moduleId, next.stepId, getStepExtras(next.stepId));
+    if (ok === false) {
+        state.migrate.errorState = true;
+        render();
+        return;
+    }
     resolveMigrateWait();
 }
 

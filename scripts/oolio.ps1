@@ -264,9 +264,16 @@ function Invoke-OolioInstallPOSApp {
 }
 
 function Invoke-OolioSetStartup {
-    Write-Section "Configuring startup via shell:startup"
+    Write-Section "Configuring startup for the signed-in user"
 
-    $startupFolder = "$env:APPDATA\Microsoft\Windows\Start Menu\Programs\Startup"
+    # Use the ALL-USERS startup folder, not the running account's own.
+    # Launch.ps1 relaunches elevated via RunAs, so the server (and therefore this
+    # step) usually runs under a different admin account than the interactive
+    # autologon POS user. Copying into $env:APPDATA would place the shortcuts in
+    # the admin's profile, where the POS user never sees them - the kiosk would
+    # silently never launch. The all-users StartUp folder fires for whichever
+    # account signs in, which is exactly what we want.
+    $startupFolder = "C:\ProgramData\Microsoft\Windows\Start Menu\Programs\StartUp"
     if (-not (Test-Path $startupFolder)) {
         New-Item -ItemType Directory -Path $startupFolder -Force | Out-Null
     }
@@ -276,18 +283,33 @@ function Invoke-OolioSetStartup {
         $src = Join-Path "C:\Users\Public\Desktop" $name
         if (Test-Path $src) {
             Copy-Item -Path $src -Destination (Join-Path $startupFolder $name) -Force
-            Write-Log "Copied to shell:startup: $startupFolder\$name" "OK"
+            Write-Log "Copied to all-users Startup: $name" "OK"
             $copied++
         }
     }
 
     if ($copied -eq 0) {
         Write-Log "No Oolio desktop shortcuts found to copy." "ERROR"
-        Write-Log "Run the install-pos-chrome / install-cds-chrome steps first." "WARN"
+        Write-Log "Run the install-pos-chrome / install-cds-chrome / install-kds-chrome steps first." "WARN"
         return
     }
 
-    Write-Log "Oolio will launch automatically when the autologon user signs in."
+    Write-Log "Oolio will launch automatically for any user that signs in."
+
+    # Read-only autologon check. shell:startup only fires once someone signs in;
+    # if autologon is off the terminal stops at the login screen and nothing
+    # launches. Report it here (never write credentials) so it is caught before
+    # go-live rather than at the next reboot.
+    $winlogon    = "HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Winlogon"
+    $autoAdmin   = (Get-ItemProperty -Path $winlogon -Name AutoAdminLogon  -ErrorAction SilentlyContinue).AutoAdminLogon
+    $defaultUser = (Get-ItemProperty -Path $winlogon -Name DefaultUserName -ErrorAction SilentlyContinue).DefaultUserName
+    if ($autoAdmin -eq "1") {
+        Write-Log "Autologon is active - terminal boots straight to user '$defaultUser'." "OK"
+    } else {
+        Write-Log "Autologon is NOT enabled on this device." "WARN"
+        Write-Log "The terminal will stop at the login screen on reboot and Oolio will not start until someone signs in." "WARN"
+        Write-Log "Configure autologon on the device image, or enable it manually, before go-live." "WARN"
+    }
 
     # Tidy up any legacy HKCU Run entries from previous toolkit versions.
     $runPath = "HKCU:\Software\Microsoft\Windows\CurrentVersion\Run"
@@ -303,9 +325,9 @@ function Invoke-OolioSetStartup {
 function Invoke-OolioFinalRestart {
     Write-Section "Initiating final restart"
     Write-Log "The following changes require a restart to take effect:"
-    Write-Log "  - Device rename to Oolio-[name]"
+    Write-Log "  - Default browser policy (Microsoft Edge) and Internet Explorer removal"
+    Write-Log "  - Touch keyboard, pinch zoom, and edge swipe settings"
     Write-Log "  - Wallpaper settings"
-    Write-Log "  - Any autologon registry changes"
     Write-Log ""
     Write-Log "Restarting in 30 seconds. Run 'shutdown /a' in a command prompt to cancel."
     shutdown /r /t 30 /c "Oolio migration toolkit - applying final changes"
