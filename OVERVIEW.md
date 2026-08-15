@@ -46,7 +46,13 @@ The toolkit asks one question at the start — **what kind of terminal is this?*
 | **KDS** | KDS | Kitchen Display screen. Bepoz cleanup and full hardening, then kds.oolio.io as a fullscreen Chrome app. No SQL, data backup, or CDS. |
 | **ALL** | All modules (manual) | Skip the type filter. Show every step in the original 1 / 2 / 3 / 4 order for cherry-picking. |
 
-The migration is organised into four modules. Modules 3 and 4 only apply to Server-Till and KDS machines, so a pure Server or pure Till tech sees a shorter flow.
+The migration opens with a System Check and is then organised into four modules. Modules 3 and 4 only apply to Server-Till and KDS machines, so a pure Server or pure Till tech sees a shorter flow.
+
+### Module 0 — System Check
+
+Runs before anything is touched, so a doomed unit is caught in two minutes rather than twenty.
+
+1. **Check hardware suitability** — Reads RAM, CPU, disk and model (no changes) and returns a verdict. Under 4 GB RAM the unit is unsuitable and the advice is to replace it (a wipe cannot add memory). 4-7 GB is usable but sluggish; the advice is to wipe/reimage first — which clears the Windows Update backlog and background bloat that actually cause the slowness — and replace only if it is still slow. In the guided flow a FAIL verdict pauses the migration so the tech has to consciously skip past it. _All types._
 
 ### Module 1 — Bepoz Software
 

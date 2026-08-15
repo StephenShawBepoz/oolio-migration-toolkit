@@ -4,6 +4,9 @@ function Get-StepFunctionName {
     param([string]$ModuleId, [string]$StepId)
 
     $map = @{
+        "system" = @{
+            "check-hardware" = "Invoke-SystemCheckHardware"
+        }
         "bepoz" = @{
             "read-registry"        = "Invoke-BepozReadRegistry"
             "terminate-processes"  = "Invoke-BepozTerminateProcesses"

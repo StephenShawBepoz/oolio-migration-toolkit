@@ -22,6 +22,9 @@ $sharedScript  = Join-Path $scriptsPath "shared.ps1"
 # ----- Default progress.json (created on first run) -----
 function Get-DefaultProgress {
     return @{
+        system = @{
+            "check-hardware" = "pending"
+        }
         bepoz = @{
             "read-registry"        = "pending"
             "terminate-processes"  = "pending"
@@ -122,6 +125,7 @@ function Test-StepManifest {
     $issues = @()
     $defaults = Get-DefaultProgress
     $scriptMap = @{
+        "system"       = "system.ps1"
         "bepoz"        = "bepoz.ps1"
         "windows"      = "windows.ps1"
         "dependencies" = "dependencies.ps1"
@@ -352,6 +356,7 @@ function Invoke-StepStreaming {
     try {
         # Resolve module script path
         $scriptMap = @{
+            "system"       = "system.ps1"
             "bepoz"        = "bepoz.ps1"
             "windows"      = "windows.ps1"
             "dependencies" = "dependencies.ps1"

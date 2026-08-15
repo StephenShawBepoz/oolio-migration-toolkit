@@ -2,7 +2,7 @@
 
 // Bump alongside CHANGELOG.md on every release. Shown in the app header so a
 // technician (or a support ticket screenshot) instantly identifies the build.
-const TOOLKIT_VERSION = 'v1.6.1';
+const TOOLKIT_VERSION = 'v1.7';
 
 // ---------- Module + step definitions ----------
 
@@ -21,6 +21,17 @@ const TERMINAL_TYPES = [
 ];
 
 const MODULES = [
+    {
+        id: 'system',
+        name: 'System Check',
+        icon: '0',
+        description: 'Check the hardware is fit for the job before touching anything.',
+        showInTypes: ['S', 'ST', 'T', 'KDS'],
+        steps: [
+            { id: 'check-hardware', title: 'Check hardware suitability', risk: 'safe', showInTypes: ['S','ST','T','KDS'],
+              note: 'Reads RAM, CPU, disk and model (no changes made) and gives a verdict. Below 4 GB RAM the unit is unsuitable - replace it. 4-7 GB is usable but sluggish; the advice is to wipe/reimage first (clears years of Windows Update backlog and bloat) and replace only if it is still slow. Run this before migrating so a doomed unit is caught in two minutes, not twenty.' }
+        ]
+    },
     {
         id: 'bepoz',
         name: 'Bepoz Software',

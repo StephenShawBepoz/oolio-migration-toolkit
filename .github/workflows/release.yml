@@ -71,6 +71,10 @@ jobs:
         shell: pwsh
         run: ./tests/patterns.tests.ps1
 
+      - name: Run hardware verdict tests
+        shell: pwsh
+        run: ./tests/hardware.tests.ps1
+
       - name: Build OolioMigration.zip
         shell: pwsh
         run: ./build-release.ps1

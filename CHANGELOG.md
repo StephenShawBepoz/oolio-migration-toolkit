@@ -2,6 +2,16 @@
 
 All notable changes to the Oolio Migration Toolkit. Newest first.
 
+## v1.7 — 2026-08-14
+
+### Added
+- **System Check (Module 0): hardware suitability.** A new read-only step that runs before anything is touched. It reads RAM, CPU, disk and model and returns a verdict aimed at one decision techs keep hitting in the field — *is this old unit worth migrating, or should it be wiped/replaced?*
+  - **Under 4 GB RAM → unsuitable.** The advice is to replace the unit; the check explicitly states a wipe will not help, because it cannot add memory.
+  - **4-7 GB → usable but sluggish.** The advice is to clean-wipe / reimage first (which clears the Windows Update backlog and background bloat that actually cause the slowness on an aged Surface Go) and replace only if it is still slow after that.
+  - **8 GB+ → good to go.** Low system-drive space and spinning HDDs add their own warnings.
+  - In the guided Migrate flow a FAIL verdict pauses the run so the technician has to consciously skip past it; a WARN completes with the advice shown. Nothing is ever changed or wiped by the toolkit — it advises, the tech acts.
+  - The verdict thresholds are covered by `tests/hardware.tests.ps1` (the 4 GB floor is a field decision, so it can't silently drift), which now runs in CI before every release.
+
 ## v1.6.1 — 2026-08-14
 
 Second-pass fixes from the completed 70-agent review (the first pass shipped in v1.6; these are the findings that survived verification against v1.6 itself).
